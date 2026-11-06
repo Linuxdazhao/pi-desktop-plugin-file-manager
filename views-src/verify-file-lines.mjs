@@ -23,7 +23,7 @@ const first = initial.doc.line(85);
 const second = initial.doc.line(86);
 const third = initial.doc.line(87);
 const selected = (selection) =>
-  readFileLineSelection(initial.update({ selection }).state, workspace, path);
+  readFileLineSelection(initial.update({ selection }).state, workspace, path, doc);
 
 assert.equal(FILE_LINES_CLIPBOARD_TYPE, "application/x-pi-desktop-file-lines");
 assert.deepEqual(selected({ anchor: third.from, head: first.from }), {
@@ -37,5 +37,15 @@ assert.equal(selected(EditorSelection.create([
   EditorSelection.range(first.from, first.to),
   EditorSelection.range(second.from, second.to),
 ])), null);
+
+const unsaved = initial.update({ changes: { from: 0, insert: "unsaved line\n" } }).state;
+const shifted = unsaved.doc.line(86);
+const shiftedSelection = unsaved.update({ selection: { anchor: shifted.from, head: shifted.to } }).state;
+assert.equal(shifted.text, first.text);
+assert.equal(readFileLineSelection(shiftedSelection, workspace, path, null), null);
+assert.equal(readFileLineSelection(shiftedSelection, workspace, path, doc), null);
+assert.deepEqual(readFileLineSelection(shiftedSelection, workspace, path, unsaved.doc.toString()), {
+  workspace, path, start: 86, end: 86,
+});
 
 console.log("FILE LINES VERIFY PASSED: inclusive source lines, empty and multiple selections");

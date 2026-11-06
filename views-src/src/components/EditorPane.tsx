@@ -192,6 +192,7 @@ export function EditorPane({
   // 内容区显示哪一种，由 lib/pane.ts 一处说了算（单值，所以不可能同时挂两种）。
   const content = contentKind({ fileKind: file?.kind ?? null, viewerMode: mode, diffOpen });
   const editorHidden = content !== "editor";
+  const matchesSavedFile = !dirty && !saving && !externalChange;
   const sourceSelection = (target: EventTarget | null) => {
     const view = handleRef.current?.view;
     if (!view || !(target instanceof Node) || !view.contentDOM.contains(target) ||
@@ -199,7 +200,9 @@ export function EditorPane({
         !isDocumentLoaded(file, loadedToken) || isExternalPath(file.path)) {
       return null;
     }
-    return readFileLineSelection(view.state, workspacePath, absoluteFullPath(file.path, activeRoot));
+    return readFileLineSelection(
+      view.state, workspacePath, absoluteFullPath(file.path, activeRoot), matchesSavedFile ? file.text : null,
+    );
   };
   /**
    * 页签只有一组：**编辑 / 预览（表格、树）/ 变更**。
@@ -434,7 +437,7 @@ export function EditorPane({
             });
           }}
         />
-        {selectionMenu && !editorHidden && selectionMenu.loadToken === file?.loadToken &&
+        {selectionMenu && matchesSavedFile && !editorHidden && selectionMenu.loadToken === file?.loadToken &&
           selectionMenu.reference.workspace === workspacePath ? (
           <ContextMenu
             x={selectionMenu.x}

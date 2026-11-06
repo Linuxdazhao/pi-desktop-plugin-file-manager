@@ -41,6 +41,8 @@
 
 在当前项目的源码编辑器中选中一段文字。复制时会保留原始纯文本，并附带项目路径、文件路径和行号，供支持行引用的宿主识别。宿主支持时，选区右键菜单也会提供「加入对话」。行号从 1 开始，包含起止行。选区刚好结束在下一行开头时，该行不计入。
 
+行引用要求编辑器内容与已保存的文件一致。保存或重新加载后可引用行范围。改动未保存时，复制仍保留普通文本。
+
 宿主通过 `window.pluginBridge.capabilities.composerFileLines` 声明支持右键入口。插件将 `{ workspace, path, start, end }` 传给 `composer.addFileLines`，也将同样的 JSON 写入剪贴板格式 `application/x-pi-desktop-file-lines`。`workspace` 是当前项目路径，`path` 是文件绝对路径。宿主负责验证来源、渲染标签，以及发送后按行读取已保存的文件。
 
 ## 安装

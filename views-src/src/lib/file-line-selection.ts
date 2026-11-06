@@ -9,8 +9,14 @@ export type FileLineReference = {
   end: number;
 };
 
-export function readFileLineSelection(state: EditorState, workspace: string, path: string): FileLineReference | null {
-  if (state.selection.ranges.length !== 1 || state.selection.main.empty) return null;
+export function readFileLineSelection(
+  state: EditorState,
+  workspace: string,
+  path: string,
+  savedText: string | null,
+): FileLineReference | null {
+  if (savedText === null || state.selection.ranges.length !== 1 || state.selection.main.empty ||
+      state.doc.toString() !== savedText) return null;
   const { from, to } = state.selection.main;
   return {
     workspace,
