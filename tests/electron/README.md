@@ -11,6 +11,15 @@ Fixtures and profiles are temporary; no user project or installed profile is rea
 have the same meaning as for the PDF checks below. The optional screenshot is
 `markdown-preview.png`. This does not qualify the installed Desktop broker or SSH.
 
+## Source line references
+
+Source line references: run `node tests/electron/verify-file-lines.cjs` with the
+same dependency overrides below. The production view uses synthetic Host
+responses to check saved selection ranges, visible Host rejection reasons,
+the unsaved hint, save recovery and Escape focus. Clipboard fallback branches
+are covered by `views-src/verify-file-lines.mjs`. This isolated plugin check
+does not replace installed-plugin acceptance after PI-Desktop #2129 lands.
+
 ## PDF checks
 
 先阅读根目录 `README.md`。本检查运行 `views/` 中的生产 IIFE 和真实的 `main.js`，通过隔离的 Electron preload 桥接；窗口保持 `sandbox: true`、`contextIsolation: true`、`nodeIntegration: false`。临时目录内创建项目、Git 基线和应用 profile，结束后关闭测试进程并删除临时目录，不读取或修改真实 PI-Desktop profile。测试进程会拒绝并记录 HTTP/HTTPS 请求。
