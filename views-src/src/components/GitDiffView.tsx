@@ -6,6 +6,7 @@
  * 两段都列出来，各自标清楚是哪一段。
  */
 
+import { Skeleton } from './Skeleton';
 import type { T } from "../i18n";
 import type { DiffSection, GitDiffResponse } from "../lib/rpc";
 import { formatSize } from "../lib/format";
@@ -81,9 +82,7 @@ export function GitDiffView({ state, t, onClose, onRefresh }: Props) {
 
       <div className="min-h-0 flex-1 overflow-auto">
         {state.status === "loading" ? (
-          <p className="px-3 py-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
-            {t("loading")}
-          </p>
+          <Skeleton kind="diff" label={t('loading')} />
         ) : null}
 
         {state.status === "error" ? (

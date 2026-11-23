@@ -13,6 +13,9 @@ import { numericColumns, pageBounds, sortRows, type SortSpec } from "../lib/csv"
 import { formatSize } from "../lib/format";
 import type { T } from "../i18n";
 import { DataTable, type DataColumn, type DataRow } from "./DataTable";
+import { Skeleton } from "./Skeleton";
+
+type RequestState<T> = { key: string; busy: boolean; data?: T; error?: string };
 
 type Props = {
   path: string;
@@ -45,36 +48,40 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
 
   const [object, setObject] = useState("");
   const [page, setPage] = useState(1);
-  const [sort, setSort] = useState<SortSpec | null>(null);
+  const [sort, setSort] = useState<(SortSpec & { name: string }) | null>(null);
   const [structure, setStructure] = useState(false);
-  const [rows, setRows] = useState<SqliteRowsResponse | null>(null);
-  const [rowsBusy, setRowsBusy] = useState(false);
-  const [rowsError, setRowsError] = useState<string | null>(null);
+  // A page/ordering refresh keeps the last confirmed page of this object on screen.
+  // The controls below describe that snapshot, never the unanswered request.
+  const rowsKey = JSON.stringify([path, object]);
+  const [rowsState, setRowsState] = useState<RequestState<SqliteRowsResponse & { sort: SortSpec | null }> | null>(null);
+  const [rowsRetry, setRowsRetry] = useState(0);
+  const currentRows = rowsState?.key === rowsKey ? rowsState : null;
+  const rows = currentRows?.data;
+  const rowsError = currentRows?.error;
 
   const [sql, setSql] = useState("select * from ");
   const [limit, setLimit] = useState(500);
-  const [result, setResult] = useState<SqliteQueryResponse | null>(null);
-  const [queryBusy, setQueryBusy] = useState(false);
-  const [queryError, setQueryError] = useState<string | null>(null);
+  const queryKey = JSON.stringify([path, sql.trim(), limit]);
+  const [queryState, setQueryState] = useState<RequestState<SqliteQueryResponse> | null>(null);
+  const currentQuery = queryState?.key === queryKey ? queryState : null;
+  const result = currentQuery?.data;
+  const queryBusy = currentQuery?.busy ?? false;
+  const queryError = currentQuery?.error;
   const [resultPage, setResultPage] = useState(1);
   const [resultSort, setResultSort] = useState<SortSpec | null>(null);
 
-  // 取数用到的列名要用于 orderBy，但把它放进依赖会让「取回数据 → 依赖变化 → 再取」
-  // 变成死循环，所以走 ref。
-  const columnsRef = useRef<SqliteRowsResponse["columns"]>([]);
-  columnsRef.current = rows?.columns ?? [];
-
-  const schemaTokenRef = useRef(0);
-  const rowsTokenRef = useRef(0);
+  const tRef = useRef(t);
+  tRef.current = t;
+  const queryTokenRef = useRef(0);
 
   // ── 打开库（读 schema） ──────────────────────────────────────────────────
 
   useEffect(() => {
-    const token = ++schemaTokenRef.current;
+    let cancelled = false;
     setSchema(null);
     setError(null);
-    setRows(null);
-    setRowsError(null);
+    setRowsState(null);
+    setObject("");
     setPage(1);
     setSort(null);
     if (!available) return;
@@ -82,9 +89,9 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
     void (async () => {
       try {
         const response = await invoke<SqliteOpenResponse | Failure>(channels.sqliteOpen, { path });
-        if (token !== schemaTokenRef.current) return;
+        if (cancelled) return;
         if (!response.ok) {
-          setError(failureMessage(response, t));
+          setError(failureMessage(response, tRef.current));
           return;
         }
         setSchema(response);
@@ -93,56 +100,36 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
           response.objects.find((entry) => entry.type === "view");
         setObject(first ? first.name : "");
       } catch (cause) {
-        if (token !== schemaTokenRef.current) return;
-        setError(String((cause as Error).message));
+        if (cancelled) return;
+        setError(cause instanceof Error ? cause.message || String(cause) : String(cause));
       }
     })();
-  }, [path, available, t]);
+    return () => { cancelled = true; };
+  }, [path, available]);
 
   // ── 取一页数据 ───────────────────────────────────────────────────────────
 
-  const loadRows = useCallback(
-    async (target: string, targetPage: number, targetSort: SortSpec | null) => {
-      const token = ++rowsTokenRef.current;
-      const column = targetSort ? columnsRef.current[targetSort.column] : undefined;
-      setRowsBusy(true);
-      setRowsError(null);
+  useEffect(() => {
+    if (!available || tab !== "browse" || !object) return;
+    let cancelled = false;
+    setRowsState((old) => ({ key: rowsKey, busy: true, data: old?.key === rowsKey ? old.data : undefined }));
+    void (async () => {
       try {
         const response = await invoke<SqliteRowsResponse | Failure>(channels.sqliteRows, {
-          path,
-          object: target,
-          page: targetPage,
-          pageSize,
-          orderBy: column ? column.name : undefined,
-          direction: targetSort ? targetSort.direction : undefined,
+          path, object, page, pageSize, orderBy: sort?.name, direction: sort?.direction,
         });
-        if (token !== rowsTokenRef.current) return;
-        if (!response.ok) {
-          setRowsError(failureMessage(response, t));
-          setRows(null);
-          return;
-        }
-        setRows(response);
+        if (cancelled) return;
+        if (!response.ok) throw new Error(failureMessage(response, tRef.current));
+        setRowsState({ key: rowsKey, busy: false, data: { ...response, sort } });
       } catch (cause) {
-        if (token !== rowsTokenRef.current) return;
-        setRowsError(String((cause as Error).message));
-      } finally {
-        if (token === rowsTokenRef.current) setRowsBusy(false);
+        if (!cancelled) setRowsState((old) => ({
+          key: rowsKey, busy: false, data: old?.key === rowsKey ? old.data : undefined,
+          error: cause instanceof Error ? cause.message || String(cause) : String(cause),
+        }));
       }
-    },
-    [path, pageSize, t],
-  );
-
-  // 「有没有数据」用 ref 判断：把它写进依赖会让「取回数据 → 依赖变化 → 再取」死循环
-  const hasRowsRef = useRef(false);
-  hasRowsRef.current = Boolean(rows);
-
-  useEffect(() => {
-    if (tab !== "browse" || !object) return;
-    // 结构面板只是在已有的列信息上换个呈现，没必要再取一页
-    if (structure && hasRowsRef.current) return;
-    void loadRows(object, page, sort);
-  }, [tab, structure, object, page, sort, loadRows]);
+    })();
+    return () => { cancelled = true; };
+  }, [available, tab, path, object, page, pageSize, sort, rowsKey, rowsRetry]);
 
   /** 换对象：页码与排序都归零。 */
   const pickObject = (name: string) => {
@@ -153,9 +140,11 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
   };
 
   const toggleSort = (column: number) => {
+    const name = rows?.columns[column]?.name;
+    if (name === undefined) return;
     setSort((prev) => {
-      if (!prev || prev.column !== column) return { column, direction: "asc" };
-      if (prev.direction === "asc") return { column, direction: "desc" };
+      if (!prev || prev.column !== column) return { name, column, direction: "asc" };
+      if (prev.direction === "asc") return { name, column, direction: "desc" };
       return null;
     });
     setPage(1);
@@ -164,35 +153,31 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
   // ── 自定义 SQL ───────────────────────────────────────────────────────────
 
   const runQuery = useCallback(async () => {
+    const token = ++queryTokenRef.current;
     const statement = sql.trim();
     if (!statement) {
-      setQueryError(t("sqliteSqlEmpty"));
-      setResult(null);
+      setQueryState({ key: queryKey, busy: false, error: t("sqliteSqlEmpty") });
       return;
     }
-    setQueryBusy(true);
-    setQueryError(null);
+    setQueryState((old) => ({ key: queryKey, busy: true, data: old?.key === queryKey ? old.data : undefined }));
     try {
       const response = await invoke<SqliteQueryResponse | Failure>(channels.sqliteQuery, {
         path,
         sql: statement,
         limit,
       });
-      if (!response.ok) {
-        setQueryError(failureMessage(response, t));
-        setResult(null);
-        return;
-      }
-      setResult(response);
+      if (token !== queryTokenRef.current) return;
+      if (!response.ok) throw new Error(failureMessage(response, tRef.current));
+      setQueryState({ key: queryKey, busy: false, data: response });
       setResultPage(1);
       setResultSort(null);
     } catch (cause) {
-      setQueryError(String((cause as Error).message));
-      setResult(null);
-    } finally {
-      setQueryBusy(false);
+      if (token === queryTokenRef.current) setQueryState((old) => ({
+        key: queryKey, busy: false, data: old?.key === queryKey ? old.data : undefined,
+        error: cause instanceof Error ? cause.message || String(cause) : String(cause),
+      }));
     }
-  }, [path, sql, limit, t]);
+  }, [path, sql, limit, queryKey, t]);
 
   // ── 渲染数据 ─────────────────────────────────────────────────────────────
 
@@ -295,7 +280,8 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
 
           {error ? <div className="sq-notice sq-danger">{error}</div> : null}
 
-          {tab === "browse" && !error ? (
+          {tab === "browse" && !error && !schema ? <Skeleton kind="table" label={t("loading")} /> : null}
+          {tab === "browse" && !error && schema ? (
             <>
               <div className="sq-bar">
                 {tables.length + views.length === 0 ? (
@@ -351,9 +337,9 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
                 </button>
               </div>
 
-              {rowsError ? <div className="sq-notice sq-danger">{rowsError}</div> : null}
+              {rowsError ? <div className="sq-notice sq-danger" role="alert">{rowsError} <button type="button" className="sq-toggle" onClick={() => setRowsRetry((n) => n + 1)}>{t("retry")}</button></div> : null}
 
-              {structure ? (
+              {structure && rows ? (
                 <div className="sq-structure">
                   <div className="sq-struct-title">{t("sqliteColumns")}</div>
                   <ul className="sq-struct-list">
@@ -405,7 +391,7 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
                   columns={browseColumns}
                   rows={browseRows}
                   showIndex={!rows.hasRowid}
-                  sort={sort}
+                  sort={rows.sort}
                   onSort={toggleSort}
                   range={browseRange}
                   notes={browseNotes}
@@ -413,14 +399,12 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
                   // 不知道总页数时只显示当前页；已经翻到底就把末页锁上
                   pageCount={rows.hasMore ? null : rows.page}
                   onPage={setPage}
-                  pageSize={pageSize}
+                  pageSize={rows.pageSize}
                   onPageSize={onPageSize}
-                  busy={rowsBusy}
+                  busy={currentRows?.busy}
                   t={t}
                 />
-              ) : (
-                <div className="sq-notice">{rowsBusy ? t("loading") : t("sqliteNoTables")}</div>
-              )}
+              ) : object && !rowsError ? <Skeleton kind={structure ? "list" : "table"} label={t("loading")} /> : null}
             </>
           ) : null}
 
@@ -498,10 +482,11 @@ export function SqliteView({ path, info, available, pageSize, onPageSize, t }: P
                     onPage={setResultPage}
                     pageSize={pageSize}
                     onPageSize={onPageSize}
+                    busy={queryBusy}
                     t={t}
                   />
                 </div>
-              ) : null}
+              ) : queryBusy ? <Skeleton kind="table" label={t("loading")} /> : null}
             </>
           ) : null}
         </>

@@ -40,10 +40,10 @@ export function decideWatchAction(input: {
   const open = input.openPath;
   // 变化列表非空却没提到打开的文件：这个文件与这批变化无关。
   // （stale 时列表可能漏掉它，所以那种情况按「可能有关」处理。）
-  const mentioned = input.changed.length === 0 ? Boolean(input.stale) : input.changed.includes(open ?? "");
+  const mentioned = input.stale || input.changed.includes(open ?? "");
 
   return {
-    refreshDirs: [...targets].slice(0, WATCH_MAX_DIR_REFRESH),
+    refreshDirs: [...targets],
     reload: Boolean(open) && mentioned && !input.dirty,
     warn: Boolean(open) && mentioned && input.dirty,
   };

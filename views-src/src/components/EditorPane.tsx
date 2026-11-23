@@ -1,5 +1,5 @@
- import { useCallback, useEffect, useRef, useState } from "react";
-import { createEditor, type EditorHandle } from "../lib/editor";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createEditor, type EditorHandle, type TabEditorSnapshot } from "../lib/editor";
 import type { Base } from "../lib/appearance";
 import type { CopyKey, T } from "../i18n";
 import { baseNameOf, formatSize, formatTime } from "../lib/format";
@@ -27,6 +27,7 @@ import { appendFileLineClipboard, readFileLineSelection, type FileLineReference 
 
 type Props = {
   file: OpenFile | null;
+  restore?: TabEditorSnapshot;
   base: Base;
   locale: "en" | "zh";
   dirty: boolean;
@@ -71,6 +72,7 @@ const TAB_LABEL: Record<string, CopyKey> = { ...MODE_LABEL, diff: "changes" };
 
 export function EditorPane({
   file,
+  restore,
    base,
    activeRoot,
   workspacePath,
@@ -138,7 +140,7 @@ export function EditorPane({
   const handlersRef = useRef({ onDirty, onSave });
   handlersRef.current = { onDirty, onSave };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
     const handle = createEditor(host, {
@@ -149,24 +151,23 @@ export function EditorPane({
     handleRef.current = handle;
     return () => {
       handleRef.current = null;
-      handle.view.destroy();
+      handle.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     handleRef.current?.setBase(base);
   }, [base, handleRef]);
 
-  // 只有「从磁盘重新装载」才替换文档。保存成功后 openFile 也会换新对象
-  // （mtime / size 变了），但 loadToken 不变——那一步必须原样跳过，否则会把
-  // 用户刚写的内容换成打开时那份，光标与滚动位置也一起丢。
-  useEffect(() => {
+  // 切换页签或从磁盘重新装载时才替换文档。保存后的元数据更新不改
+  // loadToken，不能用 file.text 或之前的快照覆盖当前草稿。
+  useLayoutEffect(() => {
     if (!file) {
       // 换文件夹（或关闭文件）之后，编辑器里不能还留着上一个文件夹的那份文档：
       // 面板上已经是空态，缓冲区却还在——切回同一相对路径的文件、或者误按
       // Ctrl+S 都会撞见别人的内容。只有装过文档（loadToken 非空）才需要清一次；
-      // setDocument 会抑制 change 回调，不会把脏标记点亮。
+      // setDocument 只替换整个状态，不会触发脏标记。
       if (loadedToken !== null) {
         handleRef.current?.setDocument("", "", true);
         setLoadedToken(null);
@@ -174,13 +175,11 @@ export function EditorPane({
       return;
     }
     if (loadedToken === file.loadToken) return;
-    handleRef.current?.setDocument(file.text, file.path, file.kind !== "text" || file.readOnly === true);
+    setSelectionMenu(null);
+    handleRef.current?.setDocument(file.text, file.path, file.kind !== "text" || file.readOnly === true, restore);
     setLoadedToken(file.loadToken);
-  }, [file, loadedToken, handleRef]);
+  }, [file, restore, loadedToken, handleRef]);
 
-  // 预览、表格、树渲染的是「编辑器里当前那份文本」，不是打开时的那份：
-  // 改完再切过去必须看到刚写的内容。文件刚换、上面的 effect 还没跑时，
-  // handle 里装的仍是上一个文件，此时退回 file.text（保存后它也是最新的）。
   const mode = viewer?.mode ?? "source";
   const imageSrc = file?.kind === "image" ? file.dataUri : undefined;
   const mediaSrc = file?.kind === "media" ? file.dataUri : undefined;
@@ -222,12 +221,11 @@ export function EditorPane({
   });
   const activeTab = activeTabKey({ diffOpen, mode });
 
-  const liveText =
-    isDocumentLoaded(file, loadedToken) && file
-      ? handleRef.current?.text() ?? file.text
-      : file?.text ?? "";
-  // 内容区现在不是编辑器时，预览/表格/树渲染的是「编辑器里当前那份文本」。
-  const structuredText = content === "editor" ? "" : liveText;
+  // Only structured previews need a string. Source-tab switches retain the
+  // immutable CodeMirror document, even before the layout effect restores it.
+  const structuredText = content === "markdown" || content === "table" || content === "tree"
+    ? (isDocumentLoaded(file, loadedToken) ? handleRef.current?.text() : restore?.state.doc.toString()) ?? file?.text ?? ""
+    : "";
 
   // 预览或查看器占位时编辑器必须藏起来、且要 false 掉 CodeMirror 的测量：
   // 它在 display:none 的容器里量不到尺寸，回到编辑态会排版错乱。

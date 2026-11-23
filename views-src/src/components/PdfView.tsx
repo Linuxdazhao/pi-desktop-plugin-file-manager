@@ -5,6 +5,7 @@ import { createPdfSession } from "../lib/pdf";
 import { clampPdfZoom, createDocumentViewer, MAX_PDF_ZOOM, MIN_PDF_ZOOM, type DocumentViewer, type PdfFindState, type PdfSpread } from "../lib/pdfViewer";
 import { DEFAULT_PDF_SEARCH_OPTIONS, type PdfSearchOptions } from "../lib/pdfSearch";
 import { PdfSidebar, type PdfSidebarTab } from "./PdfSidebar";
+import { Skeleton } from "./Skeleton";
 import "../styles/pdf.css";
 
 type Props = { src: string; name: string; size: number; locale: "en" | "zh"; t: T };
@@ -278,11 +279,12 @@ export function PdfView({ src, name, size, locale, t }: Props) {
             }} />
         </div> : null}
         <div className="pdf-reader">
+          {!error && !ready ? <div className="pdf-initial-loading"><Skeleton kind="page" label={t("pdfLoading")} /></div> : null}
           <div className="pdf-scroll" ref={scrollRef} tabIndex={0} aria-label={`${name} — ${t("pdfPreview")}`} aria-busy={!error && (!ready || rendering)}>
             <div className="pdf-document pdfViewer" ref={pagesRef} hidden={Boolean(error)} />
             {error ? <div className="pdf-message" role="alert">{t(error === "encrypted" ? "pdfEncrypted" : "pdfFailed")}</div> : null}
           </div>
-          {!error && (!ready || rendering) ? <div className="pdf-status" role="status">{t(pdf ? "pdfRendering" : "pdfLoading")}</div> : null}
+          {!error && ready && rendering ? <div className="pdf-status" role="status">{t("pdfRendering")}</div> : null}
         </div>
       </div>
     </div>

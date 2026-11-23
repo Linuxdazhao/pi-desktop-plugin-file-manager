@@ -71,7 +71,7 @@ export function DataTable({
   const hasPrev = page > 1;
 
   return (
-    <div className="dt-view" data-busy={busy ? "true" : undefined}>
+    <div className="dt-view" data-busy={busy ? "true" : undefined} aria-busy={busy || undefined}>
       <div className="dt-scroll">
         <table className="dt-table">
           <thead>

@@ -281,8 +281,13 @@ function missingPagePdf() {
       assert((await page.locator('.cm-content').innerText()).includes('Unsaved local text.'));
       assert(!(await page.locator('.cm-content').innerText()).includes('External conflicting text.'));
       await open('second.pdf');
-      await page.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
       await loaded('Second document: one page only');
+      assert.equal(await page.getByRole('dialog').count(), 0);
+      await open('notes.txt');
+      await page.waitForFunction(() => document.querySelector('.cm-content')?.textContent.includes('Unsaved local text.'));
+      await page.getByRole('button', { name: 'Reload from disk', exact: true }).first().click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Discard', exact: true }).click();
+      await page.locator('.cm-content').getByText('External conflicting text.', { exact: true }).waitFor();
       await fs.writeFile(path.join(fixtures, 'notes.txt'), 'Text editing remains available.\n');
       results.push('clean text watch reloads; dirty text warns and preserves unsaved buffer');
     }

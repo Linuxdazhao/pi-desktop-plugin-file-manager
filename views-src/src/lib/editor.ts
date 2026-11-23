@@ -34,7 +34,14 @@ const languageSlot = new Compartment();
 const highlightSlot = new Compartment();
 const readOnlySlot = new Compartment();
 
-function baseExtensions(base: Base): Extension[] {
+type EditorOptions = { base: Base; onDocChanged: () => void; onSave: () => void };
+// A snapshot may outlive its original view. Its extensions must not retain that
+// view's React callbacks (or send a save/dirty notification to the wrong pane).
+const handlers = new WeakMap<EditorView, EditorOptions>();
+const readOnlyExtensions = (value: boolean) =>
+  value ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [];
+
+function baseExtensions(base: Base, readOnly = false, language: Extension = []): Extension[] {
   return [
     lineNumbers(),
     highlightActiveLineGutter(),
@@ -53,21 +60,33 @@ function baseExtensions(base: Base): Extension[] {
     highlightSelectionMatches(),
     EditorView.lineWrapping,
     keymap.of([
+      { key: "Mod-s", preventDefault: true, run(view) { handlers.get(view)?.onSave(); return true; } },
       ...closeBracketsKeymap,
       ...defaultKeymap,
       ...searchKeymap,
       ...historyKeymap,
       ...foldKeymap,
     ]),
-    readOnlySlot.of([]),
-    languageSlot.of([]),
+    EditorView.updateListener.of(update => {
+      if (update.docChanged) handlers.get(update.view)?.onDocChanged();
+    }),
+    readOnlySlot.of(readOnlyExtensions(readOnly)),
+    languageSlot.of(language),
     highlightSlot.of(highlightExtension(base)),
   ];
 }
 
+/** Immutable draft, selection and undo history; no text copy on tab switches. */
+export type TabEditorSnapshot = {
+  readonly state: EditorState;
+  readonly scroll: ReturnType<EditorView["scrollSnapshot"]>;
+};
+
 export type EditorHandle = {
   view: EditorView;
-  setDocument(text: string, filePath: string, readOnly: boolean): void;
+  capture(): TabEditorSnapshot;
+  setDocument(text: string, filePath: string, readOnly: boolean, restore?: TabEditorSnapshot): void;
+  destroy(): void;
   setBase(base: Base): void;
   setReadOnly(readOnly: boolean): void;
   text(): string;
@@ -75,82 +94,69 @@ export type EditorHandle = {
 
 export function createEditor(
   parent: HTMLElement,
-  options: {
-    base: Base;
-    onDocChanged: () => void;
-    onSave: () => void;
-  },
+  options: EditorOptions,
 ): EditorHandle {
+  let base = options.base;
   let languageToken = 0;
-  // setDocument 本身也是一次 dispatch，会触发 updateListener；不抑制的话
-  // 「打开文件」会立刻被当成有未保存改动。
-  let suppressChanges = false;
+  const view = new EditorView({ parent, state: EditorState.create({ extensions: baseExtensions(base) }) });
+  handlers.set(view, options);
 
-  const view = new EditorView({
-    parent,
-    state: EditorState.create({
-      doc: "",
-      extensions: [
-        ...baseExtensions(options.base),
-        keymap.of([
-          {
-            key: "Mod-s",
-            preventDefault: true,
-            run: () => {
-              options.onSave();
-              return true;
-            },
-          },
-        ]),
-        EditorView.updateListener.of((update) => {
-          if (update.docChanged && !suppressChanges) options.onDocChanged();
-        }),
-      ],
-    }),
-  });
-
-  const setReadOnly = (readOnly: boolean) => {
-    view.dispatch({
-      effects: readOnlySlot.reconfigure(
-        readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [],
-      ),
-    });
+  // display:none (structured/Git preview) reports zero scroll offsets. Keep
+  // the last visible position for a tab switch initiated from such a preview.
+  let lastScroll = view.scrollSnapshot();
+  let restoringScroll = false;
+  const rememberScroll = () => {
+    if (!restoringScroll && view.scrollDOM.clientHeight) lastScroll = view.scrollSnapshot();
   };
+  view.scrollDOM.addEventListener("scroll", rememberScroll, { passive: true });
 
   return {
     view,
     text: () => view.state.doc.toString(),
-    setBase(base) {
+    capture() {
+      rememberScroll();
+      return { state: view.state, scroll: lastScroll };
+    },
+    setBase(next) {
+      base = next;
       view.dispatch({ effects: highlightSlot.reconfigure(highlightExtension(base)) });
     },
-    setReadOnly,
-    setDocument(text, filePath, readOnly) {
-      languageToken += 1;
-      const token = languageToken;
-
-      suppressChanges = true;
-      try {
-        view.dispatch({
-          changes: { from: 0, to: view.state.doc.length, insert: text },
-          selection: { anchor: 0 },
-        });
-      } finally {
-        suppressChanges = false;
-      }
-      view.scrollDOM.scrollTop = 0;
-      setReadOnly(readOnly);
-
-      // 语言是同步可用的（静态 import），一次 dispatch 就配上。
+    setReadOnly(value) {
+      view.dispatch({ effects: readOnlySlot.reconfigure(readOnlyExtensions(value)) });
+    },
+    setDocument(text, filePath, readOnly, restore) {
+      const token = ++languageToken;
       const description = resolveLanguage(filePath);
-      if (!description) {
-        view.dispatch({ effects: languageSlot.reconfigure([]) });
-        return;
+      const language = description?.support ?? [];
+      // setState is a document switch, not a replacement edit. A fresh load
+      // starts with empty history; a tab restore keeps its own history fields.
+      const state = restore ? restore.state.update({ effects: [
+        highlightSlot.reconfigure(highlightExtension(base)),
+        readOnlySlot.reconfigure(readOnlyExtensions(readOnly)),
+        languageSlot.reconfigure(language),
+      ] }).state : EditorState.create({ doc: text, extensions: baseExtensions(base, readOnly, language) });
+      view.setState(state);
+      restoringScroll = Boolean(restore);
+      if (restore) {
+        lastScroll = restore.scroll;
+        view.dispatch({ effects: restore.scroll });
+        // CodeMirror applies scroll effects during measurement. Switching away
+        // again before that frame must capture the incoming tab's own anchor.
+        view.requestMeasure({ read() {}, write() { if (token === languageToken) restoringScroll = false; } });
+      } else {
+        view.scrollDOM.scrollTo(0, 0);
+        lastScroll = view.scrollSnapshot();
       }
-      void description.load().then((support) => {
-        // 加载期间用户可能已经切走，别把语言配到别的文件上。
-        if (token !== languageToken) return;
-        view.dispatch({ effects: languageSlot.reconfigure(support) });
+
+      if (description && !description.support) void description.load().then(support => {
+        if (token === languageToken) view.dispatch({ effects: languageSlot.reconfigure(support) });
       });
+    },
+    destroy() {
+      languageToken++;
+      view.scrollDOM.removeEventListener("scroll", rememberScroll);
+      handlers.delete(view);
+      view.destroy();
     },
   };
 }

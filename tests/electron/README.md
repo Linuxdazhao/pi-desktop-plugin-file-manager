@@ -1,5 +1,25 @@
 # PDF 桌面回归检查
 
+## Loading states
+
+`npm run verify:loading` deliberately holds individual bridge responses in a temporary profile. It checks localized tree/document skeletons, real CSS animations and reduced-motion fallback, recovery from failures, and retained data during manual and filesystem refreshes. Optional `PDF_EVIDENCE_DIR` saves the loading screenshots.
+
+## File tree
+
+`npm run verify:explorer` checks recursive expand/collapse, native external file creation and deletion, and moving an open dirty document's parent folder via drag-and-drop. It runs the production view and saves the draft to its new path inside a temporary project.
+
+## Document tabs
+
+After building `views/`, run `npm run verify:doc-tabs` from `tests/electron`.
+The sandboxed Electron harness opens two `shared.txt` files from different
+directories in a temporary project. It checks independent unsaved buffers,
+reopening without duplication, and which file actually changed on disk.
+It also checks Markdown Edit/Preview across tab switches, clean close, each
+dirty-close choice (Cancel, Discard, Save), and focus on the surviving tab.
+The same dependency and runtime overrides as the PDF checks apply. Set
+`PDF_EVIDENCE_DIR` to retain `document-tabs-dirty.png` with both drafts visible
+in the tab strip. No installed Desktop profile or user files are used.
+
 ## Markdown images
 
 `pnpm verify:markdown` runs the production `file://` view and `main.js` through

@@ -1,7 +1,10 @@
 const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('node:path');
 app.setPath('userData', process.env.PDF_PROFILE_DIR);
-let settings = { fmPrefs: { watchFiles: true } };
+// Loading checks start with manual refresh, then enable the real watcher in the UI.
+const loadingTest = process.env.FM_LOADING_TEST === '1';
+let settings = { fmPrefs: { watchFiles: !loadingTest } };
+if (loadingTest) global.loadingGate = require('./verify-loading.cjs').createGate();
 global.pi = {
   workspace: { get: async () => ({ path: process.env.PDF_FIXTURE_DIR, name: 'Synthetic PDF project' }) },
   plugin: { getDataPath: async () => process.env.PDF_PROFILE_DIR, getSettings: async () => settings, setSettings: async (value) => { settings = value; } },
@@ -28,6 +31,11 @@ app.whenReady().then(async () => {
     }
     if (channel === 'app.getAppearance') return global.testAppearance;
     if (channel === 'workspace.get') return global.pi.workspace.get();
+    if (loadingTest) {
+      const response = await plugin.onPanelInvoke(channel, payload);
+      await global.loadingGate.beforeReply(channel, payload?.path);
+      return response;
+    }
     return plugin.onPanelInvoke(channel, payload);
   });
   const window = new BrowserWindow({ width: 1250, height: 880, show: true, webPreferences: {

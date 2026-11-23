@@ -4,7 +4,7 @@ import { watchAppearance, type Base, type Locale as HostLocale } from "./lib/app
 import { watchWorkspace, workspaceKey, type Workspace } from "./lib/workspace";
 import { channels, failureMessage, isConflict, type DeleteResponse, type EditorOption, type EditorsResponse, type Failure, type FileEntry, type GitDiffResponse, type GitSummary, type HelloResponse, type ListResponse, type Prefs, type PrefsResponse, type ReadRequest, type ReadResponse, type SearchHit, type SearchResponse, type WatchResponse, type WriteRequest, type WriteResponse } from "./lib/rpc";
 import { gitSummaryText, lookupGit } from "./lib/git";
-import { decideWatchAction } from "./lib/watch";
+import { useTreeWatch } from "./lib/useTreeWatch";
 import { baseNameOf, parentOf } from "./lib/format";
 import { absoluteFullPath, findRootForPath, hostActionPath, normalizeRoots, primaryRootOf, projectKeyOf, rememberProjectRoot, resolveSelectedRoot, samePath, type WorkspaceRoot } from "./lib/roots";
 
@@ -18,21 +18,27 @@ import { copyText } from "./lib/clipboard";
 import { isExternalPath, watchHostOpenRequests, type HostOpenRequest } from "./lib/hostOpen";
 import type { DiffViewState } from "./components/GitDiffView";
 import { Tree, type DirState } from "./components/Tree";
+import { Skeleton } from './components/Skeleton';
+import { FileIcon } from "./lib/fileIcons";
+import { IconButton } from "./components/IconButton";
+import { GitPanel } from "./components/GitPanel";
+import { GitCommitDetail, type HistoryCommit } from "./components/GitHistory";
+import { GitPreview, type PreviewTab } from "./components/GitPreview";
 import { EditorPane } from "./components/EditorPane";
 import { ConfirmDialog, PromptDialog } from "./components/Dialogs";
 import { ContextMenu, type MenuEntry } from "./components/ContextMenu";
 import type { EditorHandle } from "./lib/editor";
+import { useDocumentTabs } from "./lib/documentTabs";
 
 type SearchState = { hits: SearchHit[]; running: boolean; done: boolean };
 
-type Guard = { body: string } | null;
+type Guard = { body: string; paths: string[] } | null;
 type Prompt =
   | { kind: "newFile"; parent: string }
   | { kind: "newFolder"; parent: string }
   | { kind: "rename"; entry: FileEntry }
-  | { kind: "move"; entry: FileEntry }
   | null;
-type Conflict = { mtimeMs: number; size: number } | null;
+type Conflict = { path: string; mtimeMs: number; size: number } | null;
 type Menu = { x: number; y: number; entry: FileEntry | null } | null;
 
 /** `a/b/c.txt` → ["a", "a/b"]：打开文件前要逐级展开并加载的祖先目录。 */
@@ -47,14 +53,6 @@ function ancestorPaths(relPath: string): string[] {
 
 const SEARCH_PAGE = 60;
 
-/**
- * 外部改动的轮询间隔（0.8.0）。宿主没有给插件「向视图推送」的通道，视图只能自己
- * 来取增量；主进程那边是操作系统的原生监听，这里只是取一次结果的频率。
- *
- * 1.2s 是「几乎立刻」与「不吵」之间取的：面板不可见（document.hidden）时这一轮
- * 直接跳过，所以把面板切到后台不会白刷流量。
- */
-const WATCH_POLL_MS = 1200;
 
 export default function App() {
   const [hostLocale, setHostLocale] = useState<HostLocale>("en");
@@ -68,11 +66,16 @@ export default function App() {
   const remoteReadOnly = root?.path.startsWith("remote-project:") === true;
   const [directories, setDirectories] = useState<Map<string, DirState>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const expandToken = useRef(0);
+  const [expanding, setExpanding] = useState(false);
+  const directoryRequests = useRef(new Map<string, symbol>());
   const [selected, setSelected] = useState<string | null>(null);
-  const [openFile, setOpenFile] = useState<OpenFile | null>(null);
-  const [dirty, setDirty] = useState(false);
+  const documents = useDocumentTabs();
+  const openFile = documents.active?.file ?? null;
+  const dirty = documents.active?.dirty ?? false;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [openingPath, setOpeningPath] = useState<string | null>(null);
   const [prefs, setPrefs] = useState<Prefs>({
     splitRatio: 0.32,
     treeCollapsed: false,
@@ -86,6 +89,11 @@ export default function App() {
   });
   /** 整个工作区的 git 概览（分支 + 各状态计数），跟着最近一次列表刷新。 */
   const [gitSummary, setGitSummary] = useState<GitSummary | null>(null);
+  const [gitOpen, setGitOpen] = useState(false);
+  const [inspectedCommit, setInspectedCommit] = useState<HistoryCommit | null>(null);
+  const [previewTab, setPreviewTab] = useState<PreviewTab | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [gitRefresh, setGitRefresh] = useState(0);
   /** 差异视图：path + 加载态。null = 右侧仍是编辑器。 */
   const [diff, setDiff] = useState<(DiffViewState & { path: string }) | null>(null);
   /** 这个运行时能不能监听（0.8.0）；不能就把「自动刷新」开关显示成不可用。 */
@@ -96,7 +104,7 @@ export default function App() {
    * 这时**不自动装载**——静默丢掉用户刚敲的字是最糟的一种「自动」；只提示一句，
    * 由用户点「重新加载」（或走原来的未保存确认框）来决定。
    */
-  const [externalChange, setExternalChange] = useState(false);
+  const externalChange = documents.active?.changed ?? false;
   const [ignoreActive, setIgnoreActive] = useState(false);
   const [guard, setGuard] = useState<Guard>(null);
   const [prompt, setPrompt] = useState<Prompt>(null);
@@ -120,13 +128,10 @@ export default function App() {
   const dirsRef = useRef(directories);
   const revisionRef = useRef(0);
   const openTokenRef = useRef(0);
+  const watchReadToken = useRef(0);
   const searchTokenRef = useRef(0);
   /** 差异请求的守卫：连点「刷新」时只有最后一次的结果算数。 */
   const diffTokenRef = useRef(0);
-  /** 外部改动轮询的游标（0.8.0）。 */
-  const watchCursorRef = useRef(0);
-  /** 轮询回调要拿最新的 loadDirectory / openEntry，经 ref 转发以免重订阅。 */
-  const watchApplyRef = useRef<(paths: string[], stale: boolean) => void>(() => {});
   /** 当前差异视图对应哪个文件；保存 / 重新加载后据此决定要不要重取。 */
   const diffPathRef = useRef<string | null>(null);
   /** loadDiff 经 ref 转发：openEntry 定义在它之前，却要在读完之后回调它。 */
@@ -143,7 +148,7 @@ export default function App() {
   const openPathRef = useRef<string | null>(null);
   const pendingRef = useRef<(() => void) | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const loadRef = useRef<(path: string, force?: boolean) => Promise<void>>(async () => {});
+  const loadRef = useRef<(path: string, force?: boolean) => Promise<FileEntry[] | undefined>>(async () => undefined);
   /** 宿主请求（入口查询串 / view:open 推送）统一走它。 */
   const hostOpenRef = useRef<(request: HostOpenRequest) => void>(() => {});
   /** 宿主请求在 ready 之前到达时先排队，见下面 ready 的 flush effect。 */
@@ -217,20 +222,28 @@ export default function App() {
   const resetExplorer = useCallback(() => {
     revisionRef.current += 1;
     openTokenRef.current += 1;
+    setOpeningPath(null);
     setDirectories(new Map());
     setExpanded(new Set());
     setSelected(null);
-    setOpenFile(null);
-    setDirty(false);
+    documents.clear();
+    setConflict(null);
+    pendingRef.current = null;
+    setGuard(null);
     setError(null);
     setQuery("");
     setSearch({ hits: [], running: false, done: true });
     // 概览与徽标都是「上一个 root 的」，换项目 / 换文件夹必须一起清掉。
     setGitSummary(null);
+    setGitOpen(false);
+    setInspectedCommit(null);
+    setPreviewTab(null);
+    setShowPreview(false);
     setDiff(null);
-    // 监听游标也是「上一个 root 的」：留着它会漏掉新项目开头的那批变化。
-    watchCursorRef.current = 0;
-    setExternalChange(false);
+    expandToken.current++;
+    directoryRequests.current.clear();
+    setExpanding(false);
+    setMenu(null);
   }, []);
 
   /**
@@ -282,9 +295,10 @@ export default function App() {
       // 与 0.4.0 一致：换项目时若有未保存的改动，先问一句（换基点走的是另一个
       // 入口，它自己带守卫，见 switchRoot / applyHostOpen）。
       const apply = () => applyRef.current(workspace);
-      if (dirtyRef.current) {
+      const paths = documents.tabs.filter(tab => tab.dirty).map(tab => tab.file.path);
+      if (paths.length) {
         pendingRef.current = apply;
-        setGuard({ body: tRef.current("dirtyPromptBody", { name: currentNameRef.current }) });
+        setGuard({ body: tRef.current("dirtyPromptBody", { name: paths.join(", ") }), paths });
         return;
       }
       apply();
@@ -370,7 +384,10 @@ export default function App() {
     async (path: string, force = false) => {
       const revision = revisionRef.current;
       const existing = dirsRef.current.get(path);
-      if (!force && existing?.entries && !existing.loading) return;
+      if (!force && existing?.entries && !existing.loading) return existing.entries;
+      const token = Symbol();
+      directoryRequests.current.set(path, token);
+      const current = () => revision === revisionRef.current && directoryRequests.current.get(path) === token;
 
       const setDir = (state: DirState) =>
         setDirectories((prev) => {
@@ -379,10 +396,10 @@ export default function App() {
           return next;
         });
 
-      setDir({ loading: true });
+      if (!existing?.entries) setDir({ loading: true });
       try {
         const response = await invoke<ListResponse | Failure>(channels.list, { path, workspacePath: workspaceRef.current?.path });
-        if (revision !== revisionRef.current) return;
+        if (!current()) return revision === revisionRef.current && response.ok ? response.entries : undefined;
         if (!response.ok) {
           setDir({ error: failureMessage(response, t) });
           return;
@@ -394,8 +411,9 @@ export default function App() {
         // 概览是整个工作区的（与列的是哪个目录无关），所以任何一次列表刷新都拿
         // 最新的一份回来；徽标已经随每条 entry 一起进来了。
         setGitSummary(response.git ?? null);
+        return response.entries;
       } catch (cause) {
-        if (revision !== revisionRef.current) return;
+        if (!current()) return;
         setDir({ error: String((cause as Error).message) });
       }
     },
@@ -413,15 +431,14 @@ export default function App() {
         else next.add(path);
         return next;
       });
-      void loadDirectory(path);
+      if (!expanded.has(path)) void loadDirectory(path, true);
     },
-    [loadDirectory],
+    [expanded, loadDirectory],
   );
 
   const refreshTree = useCallback(() => {
     const revision = revisionRef.current;
     const open = [...expanded];
-    setDirectories(new Map());
     void (async () => {
       await loadDirectory("", true);
       for (const path of open) {
@@ -430,6 +447,33 @@ export default function App() {
       }
     })();
   }, [expanded, loadDirectory]);
+
+  const collapseAll = () => {
+    expandToken.current++;
+    setExpanding(false);
+    setExpanded(new Set());
+  };
+  const expandAll = async () => {
+    const token = ++expandToken.current;
+    setExpanding(true);
+    const queue = [""];
+    const seen = new Set(queue);
+    for (let index = 0; index < queue.length && token === expandToken.current;) {
+      const batch = queue.slice(index, index + 4);
+      index += batch.length;
+      const listings = await Promise.all(batch.map(path => loadDirectory(path, true)));
+      if (token !== expandToken.current) return;
+      const children: string[] = [];
+      for (const entries of listings) for (const e of entries ?? []) {
+        if (!e.isDirectory || e.isSymlink || (!prefsRef.current.showIgnored && e.ignored) || seen.has(e.path)) continue;
+        seen.add(e.path);
+        children.push(e.path);
+        queue.push(e.path);
+      }
+      if (children.length) setExpanded(prev => new Set([...prev, ...children]));
+    }
+    if (token === expandToken.current) setExpanding(false);
+  };
 
   // ── 打开 / 保存 ──────────────────────────────────────────────────────────
 
@@ -444,7 +488,7 @@ export default function App() {
   const loadDiff = useCallback(
     async (path: string) => {
       const token = ++diffTokenRef.current;
-      setDiff({ path, status: "loading" });
+      setDiff(prev => prev?.path === path && prev.status === 'ready' ? prev : { path, status: 'loading' });
       try {
         const response = await invoke<GitDiffResponse>(channels.gitDiff, { path });
         if (token !== diffTokenRef.current) return;
@@ -482,142 +526,115 @@ export default function App() {
    * 打开一个路径。只要 path：宿主请求打开的可能是项目之外的绝对路径（会话
    * 临时目录 / 附件），它没有对应的树条目。
    */
+  const captureTab = useCallback(() => {
+    const tab = documents.active;
+    if (tab?.file.kind === 'text' && handleRef.current) tab.editor = handleRef.current.capture();
+  }, [documents]);
+
   const openEntry = useCallback(
-    async (entry: { path: string }) => {
-      const token = ++openTokenRef.current;
+    async (entry: { path: string }, fromWatch = false, reload = false) => {
+      if (!fromWatch) { setShowPreview(false); setInspectedCommit(null); }
+      const token = fromWatch ? openTokenRef.current : ++openTokenRef.current;
+      const readToken = ++watchReadToken.current;
+      const current = () => token === openTokenRef.current && (!fromWatch || (readToken === watchReadToken.current && documents.active?.file.path === entry.path));
       // 项目外路径不在树里：选中态置空，免得高亮到一条无关的行。
       const external = isExternalPath(entry.path);
-      setSelected(external ? null : entry.path);
-      setError(null);
+      if (!fromWatch) { setSelected(external ? null : entry.path); setError(null); }
+      const cached = documents.get(entry.path);
+      if (!fromWatch) setOpeningPath(!cached ? entry.path : null);
+      if (!fromWatch && !reload && cached) {
+        if (documents.active !== cached) { captureTab(); documents.activate(entry.path); closeDiff(); }
+        const disk = dirsRef.current.get(parentOf(entry.path))?.entries?.find(e => e.path === entry.path);
+        if (disk && disk.mtimeMs > cached.file.mtimeMs + 0.5) documents.patch(entry.path, { changed: true });
+        if (!cached.changed || cached.dirty) return;
+      }
       try {
         const request: ReadRequest = external
           ? { path: entry.path, external: true }
           : { path: entry.path };
         const response = await invoke<ReadResponse | Failure>(channels.read, { ...request, workspacePath: workspaceRef.current?.path });
-        if (token !== openTokenRef.current) return;
+        if (!current()) return;
+        if ((fromWatch || cached?.changed) && !reload && documents.get(entry.path)?.dirty) { documents.patch(entry.path, { changed: true }); return; }
         if (!response.ok) {
           setError(failureMessage(response, t));
           return;
         }
         loadTokenRef.current += 1;
-        setOpenFile(toOpenFile(response, loadTokenRef.current));
-        setDirty(false);
-        setExternalChange(false);
+        if (documents.active?.file.path !== entry.path) captureTab();
+        const file = toOpenFile(response, loadTokenRef.current);
+        documents.load(file);
+        const mode = resolveViewer(file.path, prefsRef.current)?.mode;
+        if (mode && !documents.active?.mode) documents.patch(file.path, { mode });
         // 换文件就收起上一个文件的差异视图（它占着整个右侧）；重新加载同一个文件
         // 则要按新内容重取——它此刻多半正开着。
         if (diffPathRef.current === entry.path) {
-          setDiff({ path: entry.path, status: "loading" });
           loadDiffRef.current(entry.path);
         } else {
           setDiff(null);
         }
       } catch (cause) {
-        if (token !== openTokenRef.current) return;
+        if (!current()) return;
         setError(String((cause as Error).message));
+      } finally {
+        if (!fromWatch && current()) setOpeningPath(null);
       }
     },
-    [t],
+    [captureTab, closeDiff, documents, t],
   );
 
 
-  // ── 外部改动监听（0.8.0） ────────────────────────────────────────────────
-  //
-  // 主进程用 fs.watch 盯着基点 root，视图每 1.2s 取一次「上次之后变了哪些路径」。
-  // 为什么是轮询而不是推送：宿主没有给插件「向视图推送」的通道（pi 上只有
-  // ui.showToast / notify 这类单向通知），而让视图自己在整棵树上 stat 一遍又太贵。
-
-  /**
-   * 收到一批外部改动之后做什么。两件事，各有各的边界：
-   *   ① **刷新树**：变化的父目录重列一次——mtime、体积、git 徽标、删除与新建都
-   *      在这里跟上。批量改动时最多刷新 WATCH_MAX_DIR_REFRESH 个目录，剩下的留给
-   *      下一次或用户点「刷新」（不能因为一次 checkout 就把面板打满）。
-   *   ② **重新读打开的文件**：只有当打开的正是被改的那个文件、且**没有未保存的
-   *      改动**时才自动装载。有未保存改动就只亮出提示条，绝不静默覆盖用户刚敲的字。
-   */
-  const applyWatchChanges = useCallback(
-    (paths: string[], stale: boolean) => {
-      // 判定本身在 lib/watch.ts（纯函数、可离线断言）：这里只负责执行。
-      const decision = decideWatchAction({
-        changed: paths,
-        stale,
-        openPath: openPathRef.current,
-        dirty: dirtyRef.current,
-      });
-
-      for (const dir of decision.refreshDirs) {
-        // 只刷新已经加载过的目录：没展开过的目录刷了也看不到，还白花一次通道调用。
-        if (dirsRef.current.has(dir)) void loadDirectory(dir, true);
-      }
-
-      // 项目外的文件（宿主请求打开的会话临时文件 / 附件）没有可监听的基点。
-      const currentPath = openPathRef.current;
-      if (!currentPath || isExternalPath(currentPath)) return;
-      if (decision.warn) {
-        setExternalChange(true);
-        return;
-      }
-      if (decision.reload) {
-        setExternalChange(false);
-        void openEntry({ path: currentPath });
-      }
+  useTreeWatch(!remoteReadOnly && prefs.watchFiles ? activeRoot?.path ?? null : null, {
+    visible: () => prefs.treeCollapsed ? [] : ["", ...[...expanded].filter(dir => ancestorPaths(dir).every(parent => expanded.has(parent)))],
+    refresh: dir => loadDirectory(dir, true),
+    onPaths: (paths, stale) => documents.noteChanges(paths, stale),
+    document: () => ({ openPath: openPathRef.current, dirty: dirtyRef.current }),
+    onDocument: (path, warn) => {
+      if (isExternalPath(path)) return;
+      documents.patch(path, { changed: true });
+      if (!warn) void openEntry({ path }, true);
     },
-    [loadDirectory, openEntry],
-  );
-
-  watchApplyRef.current = applyWatchChanges;
-
-  // 有项目、开着这个偏好时才轮询；换项目/关掉偏好时计时器与游标一起归零。
-  useEffect(() => {
-    if (!root || remoteReadOnly || !prefs.watchFiles) return;
-    let stopped = false;
-    watchCursorRef.current = 0;
-
-    const tick = async () => {
-      // 面板不可见时不取：既省事也避免后台堆积。
-      if (stopped || document.hidden) return;
-      try {
-        const response = await invoke<WatchResponse | Failure>(channels.watch, {
-          since: watchCursorRef.current,
-        });
-        if (stopped) return;
-        if (!response.ok) return;
-        setWatchAvailable(response.available);
-        watchCursorRef.current = response.revision;
-        if (response.changed.length > 0 || response.stale) {
-          watchApplyRef.current(response.changed, response.stale);
-        }
-      } catch {
-        // 监听不可用 / 通道失败：静默跳过这一轮。手动刷新一直都在，不受影响。
-      }
-    };
-
-    void tick();
-    const timer = window.setInterval(tick, WATCH_POLL_MS);
-    return () => {
-      stopped = true;
-      window.clearInterval(timer);
-    };
-  }, [prefs.watchFiles, root]);
+    onAvailable: setWatchAvailable,
+  });
 
   const withGuard = useCallback(
-    (action: () => void) => {
-      if (!dirtyRef.current) {
+    (action: () => void, all = false) => {
+      const targets = all ? documents.tabs.filter(tab => tab.dirty) : documents.active?.dirty ? [documents.active] : [];
+      if (!targets.length) {
         action();
         return;
       }
       pendingRef.current = action;
-      setGuard({ body: t("dirtyPromptBody", { name: currentNameRef.current }) });
+      const paths = targets.map(tab => tab.file.path);
+      setGuard({ body: t("dirtyPromptBody", { name: paths.join(', ') }), paths });
     },
-    [t],
+    [documents, t],
   );
 
   const requestOpen = useCallback(
-    (entry: FileEntry) => {
-      if (entry.path === openFile?.path) return;
-      withGuard(() => void openEntry(entry));
-    },
-    [openEntry, openFile?.path, withGuard],
+    (entry: FileEntry) => { void openEntry(entry); },
+    [openEntry],
   );
+
+  const closeTab = (path: string) => {
+    const tab = documents.get(path);
+    if (!tab || saving) return;
+    const close = () => {
+      const wasActive = documents.active === tab;
+      ++openTokenRef.current;
+      setOpeningPath(null);
+      documents.remove(path);
+      if (wasActive) {
+        closeDiff(); setError(null);
+        const next = documents.active?.file.path;
+        setSelected(next && !isExternalPath(next) ? next : null);
+        if (next && documents.active?.changed && !documents.active.dirty) void openEntry({ path: next });
+      }
+      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('.fm-document-tabs [aria-selected="true"]')?.focus({ preventScroll: true }));
+    };
+    if (!tab.dirty) { close(); return; }
+    pendingRef.current = close;
+    setGuard({ body: t('closeDirtyFile', { name: path }), paths: [path] });
+  };
 
   const persistPrefs = useCallback((partial: Partial<Prefs>) => {
     setPrefs((prev) => ({ ...prev, ...partial }));
@@ -660,7 +677,7 @@ export default function App() {
   /** 切换器里点了一个 folder：照旧先过脏缓冲守卫，取消就什么都不改。 */
   const switchRoot = (target: WorkspaceRoot) => {
     if (!activeRoot || samePath(activeRoot.path, target.path)) return;
-    withGuard(() => void activateRoot(target));
+    withGuard(() => void activateRoot(target), true);
   };
 
   /** 菜单锚在控件下方；ContextMenu 自己会按视口夹取，靠边也不会跑出去。 */
@@ -705,6 +722,9 @@ export default function App() {
   const applyHostOpen = useCallback(
     (request: HostOpenRequest) => {
       const requestedWorkspace = workspaceKey(workspaceRef.current);
+      setGitOpen(false);
+      setInspectedCommit(null);
+      setShowPreview(false);
       const rawPath = request.path;
       const absolute = isExternalPath(rawPath);
       // 组的 root 列表还没到手时（ready 之前）这个请求会被排队，见下面 ready 的 effect。
@@ -740,7 +760,7 @@ export default function App() {
 
       // 基点没变（也包括「没有项目」与组外路径）：直接开，脏缓冲守卫照旧。
       if (!base || samePath(activeRootRef.current?.path ?? "", base.path)) {
-        withGuard(show);
+        show();
         return;
       }
       // 要先换基点：换成功再打开；守卫被取消的话基点也不动。
@@ -748,7 +768,7 @@ export default function App() {
         void activateRoot(base).then((ok) => {
           if (ok) show();
         });
-      });
+      }, true);
     },
     [activateRoot, loadDirectory, openEntry, persistPrefs, roots, withGuard],
   );
@@ -756,18 +776,17 @@ export default function App() {
   hostOpenRef.current = applyHostOpen;
 
   const save = useCallback(
-    async (override?: { mtimeMs: number; size: number }): Promise<boolean> => {
-      if (!openFile || openFile.kind !== "text" || openFile.readOnly) return false;
+    async (override?: { mtimeMs: number; size: number }, path = documents.active?.file.path): Promise<boolean> => {
+      const tab = path ? documents.get(path) : undefined;
+      if (!tab || tab.file.kind !== 'text' || tab.file.readOnly) return false;
       // 没有改动就不写盘：Ctrl+S 是习惯动作，不该白抬一次 mtime、白记一行审计，
       // 更不该因为文件在别处被改过而弹出一个「冲突」。带 override 的是冲突框里的
       // 「覆盖」，那是显式意图，照写。
-      if (!override && !dirtyRef.current) return false;
-      // 同一个文件上一次保存还没回来：复用那次结果。连按两下 Ctrl+S 不会发出
-      // 第二次写，也就不会用同一个 mtime 期望值把自己撞成 CONFLICT。
-      if (inFlightRef.current?.path === openFile.path) return inFlightRef.current.promise;
-
-      const target = openFile;
-      const text = handleRef.current?.text() ?? target.text;
+      if (!override && !tab.dirty) return false;
+      if (inFlightRef.current) return inFlightRef.current.path === path ? inFlightRef.current.promise : false;
+      const target = tab.file, revision = revisionRef.current;
+      const tabText = () => documents.active === tab ? handleRef.current?.text() ?? target.text : tab.editor?.state.doc.toString() ?? target.text;
+      const text = tabText();
 
       const run = (async (): Promise<boolean> => {
         setSaving(true);
@@ -785,26 +804,24 @@ export default function App() {
             // 路径落在项目根内。
             ...(external ? { external: true } : {}),
           };
-          const response = await invoke<WriteResponse>(channels.write, request);
+          const response = await invoke<WriteResponse>(channels.write, { ...request, workspacePath: workspaceRef.current?.path, expectedRoot: activeRootRef.current?.path });
 
           // 写是成功了，但用户可能已经切走——那就只认这次写的成功，别把
           // 元数据、脏标记、冲突框落到另一个文件上。
-          if (openPathRef.current !== target.path) return response.ok;
+          if (revisionRef.current !== revision || documents.get(target.path) !== tab) return false;
 
           if (response.ok) {
             // 只更新元数据（下一次乐观锁的期望值）与文本，loadToken 不动：
             // 编辑器里的文档就是刚存下去的那份，不该被重装。
-            setOpenFile((prev) => (prev ? withSavedContent(prev, response, text) : prev));
-            setDirty((handleRef.current?.text() ?? text) !== text);
-            setExternalChange(false);
+            documents.patch(target.path, { file: withSavedContent(target, response, text), dirty: tabText() !== text, changed: false });
             // 项目外的文件没有对应的树目录要刷新。
             if (!external) void loadDirectory(parentOf(target.path), true);
             // 差异视图正开着这个文件时跟着重取：刚存下的内容就是最新的变更。
             if (diffPathRef.current === target.path) loadDiffRef.current(target.path);
-            return true;
+            return !tab.dirty;
           }
           if (isConflict(response)) {
-            setConflict({ mtimeMs: response.mtimeMs, size: response.size });
+            setConflict({ path: target.path, mtimeMs: response.mtimeMs, size: response.size });
             return false;
           }
           setError(failureMessage(response, t));
@@ -824,7 +841,7 @@ export default function App() {
         if (inFlightRef.current?.promise === run) inFlightRef.current = null;
       }
     },
-    [loadDirectory, openFile, t],
+    [loadDirectory, documents, t],
   );
 
   saveRef.current = save;
@@ -846,7 +863,7 @@ export default function App() {
 
   const reloadFromDisk = useCallback(() => {
     if (!openFile) return;
-    withGuard(() => void openEntry({ path: openFile.path } as FileEntry));
+    withGuard(() => void openEntry({ path: openFile.path }, false, true));
   }, [openEntry, openFile, withGuard]);
 
   // ── 搜索 ─────────────────────────────────────────────────────────────────
@@ -896,6 +913,8 @@ export default function App() {
       setSearch({ hits: [], running: false, done: true });
       return;
     }
+    searchTokenRef.current++;
+    setSearch({ hits: [], running: true, done: false });
     const timer = window.setTimeout(() => void runSearch(query), 220);
     return () => window.clearTimeout(timer);
   }, [query, runSearch]);
@@ -948,7 +967,7 @@ export default function App() {
         await loadDirectory(active.parent, true);
         if (active.parent) setExpanded((prev) => new Set(prev).add(active.parent));
       } else if (active.kind === "rename") {
-        const response = await invoke<{ ok: true } | Failure>(channels.rename, {
+        const response = await invoke<{ ok: true; entry: FileEntry } | Failure>(channels.rename, {
           path: active.entry.path,
           newName: value,
         });
@@ -956,20 +975,9 @@ export default function App() {
           setError(failureMessage(response, t));
           return;
         }
+        documents.move(active.entry.path, response.entry.path);
         await loadDirectory(parentOf(active.entry.path), true);
         setSelected((prev) => (prev === active.entry.path ? null : prev));
-      } else {
-        const response = await invoke<{ ok: true } | Failure>(channels.move, {
-          from: active.entry.path,
-          toDir: value,
-        });
-        if (!response.ok) {
-          setError(failureMessage(response, t));
-          return;
-        }
-        await loadDirectory(parentOf(active.entry.path), true);
-        await loadDirectory(value, true);
-        setExpanded((prev) => new Set(prev).add(value));
       }
     } catch (cause) {
       setError(String((cause as Error).message));
@@ -992,13 +1000,9 @@ export default function App() {
         if (!external) await loadDirectory(parentOf(entry.path), true);
         setSelected((prev) => (prev === entry.path ? null : prev));
         // 删的正是当前打开的文件：编辑器里那份内容已经没有对应的磁盘文件了。
-        if (openPathRef.current === entry.path) {
-          setOpenFile(null);
-          setDirty(false);
-          setError(null);
-          // 差异视图跟的是同一个文件，文件没了它就没有内容可显示。
-          if (diffPathRef.current === entry.path) closeDiff();
-        }
+        const within = (p: string) => p === entry.path || p.startsWith(entry.path + '/');
+        for (const tab of documents.tabs) if (within(tab.file.path)) documents.remove(tab.file.path);
+        if (diffPathRef.current && within(diffPathRef.current)) closeDiff();
       } catch (cause) {
         setError(String((cause as Error).message));
       }
@@ -1006,9 +1010,27 @@ export default function App() {
     [loadDirectory, t],
   );
 
-  const refreshSelectedDirectory = () => {
-    const target = selected ? parentOf(selected) : "";
-    void loadDirectory(target, true);
+  const moveEntry = async (entry: FileEntry, toDir: string) => {
+    if (remoteReadOnly || inFlightRef.current) return;
+    const revision = revisionRef.current;
+    try {
+      const result = await invoke<{ ok: true; entry: FileEntry | null } | Failure>(channels.move, {
+        from: entry.path, toDir, workspacePath: workspaceRef.current?.path, expectedRoot: activeRoot?.path,
+      });
+      if (revision !== revisionRef.current) return;
+      if (!result.ok) { setError(failureMessage(result, t)); return; }
+      if (!result.entry) return;
+      const dest = result.entry.path;
+      const within = (path: string) => path === entry.path || path.startsWith(entry.path + "/");
+      documents.move(entry.path, dest);
+      if (diffPathRef.current && within(diffPathRef.current)) closeDiff();
+      setSelected(dest);
+      expandToken.current++;
+      setExpanding(false);
+      setExpanded(prev => new Set([...prev].filter(path => !within(path)).concat(ancestorPaths(dest))));
+      setDirectories(prev => new Map([...prev].filter(([path]) => !within(path))));
+      await Promise.all([loadDirectory(parentOf(entry.path), true), loadDirectory(toDir, true)]);
+    } catch (cause) { if (revision === revisionRef.current) setError(String((cause as Error).message)); }
   };
 
   const openMenu = (event: React.MouseEvent, entry: FileEntry | null) => {
@@ -1117,15 +1139,18 @@ export default function App() {
   // 结构化视图（Markdown 预览 / 表格 / 树）只对文本文件成立；具体有哪几种、
   // 默认落在哪一侧，全部由 lib/viewers.ts 一处判定，偏好决定默认值。
   const viewer = openFile && openFile.kind === "text" ? resolveViewer(openFile.path, prefs) : null;
+  if (viewer && documents.active?.mode && viewer.modes.includes(documents.active.mode)) viewer.mode = documents.active.mode;
   /**
    * 当前打开文件的 git 状态。fm.read 打开那一刻就带回来了（左侧列表收起时也只有
    * 这一条路）；打开之后才发生的改动——用户自己刚存过一次——由树里的徽标补上，
    * 否则「保存之后右侧的『变更』按钮凭空消失」。
    */
-  const openFileGit = openFile ? (openFile.git ?? lookupGit(directories, openFile.path)) : null;
+  const listedOpenFile = openFile && directories.get(parentOf(openFile.path))?.entries?.find(e => e.path === openFile.path);
+  const openFileGit = listedOpenFile ? listedOpenFile.git ?? null : openFile ? (openFile.git ?? lookupGit(directories, openFile.path)) : null;
 
   const changeViewerMode = (mode: ViewerMode) => {
     if (!viewer) return;
+    if (openFile) documents.patch(openFile.path, { mode });
     if (viewer.modes.includes("markdown")) persistPrefs({ mdPreview: mode === "markdown" });
     else if (viewer.modes.includes("table")) persistPrefs({ csvTable: mode === "table" });
     else if (viewer.modes.includes("tree")) persistPrefs({ jsonTree: mode === "tree" });
@@ -1140,8 +1165,8 @@ export default function App() {
         newFile: t("newFile"),
         newFolder: t("newFolder"),
         rename: t("rename"),
-        move: t("move"),
         delete: t("delete"),
+        copyPath: t("copyPath"),
         copyRelativePath: t("copyRelativePath"),
         copyAbsolutePath: t("copyAbsolutePath"),
         openWithSubmenu: t("openWithSubmenu"),
@@ -1153,7 +1178,6 @@ export default function App() {
       onNewFile: (parent) => setPrompt({ kind: "newFile", parent }),
       onNewFolder: (parent) => setPrompt({ kind: "newFolder", parent }),
       onRename: (entry) => setPrompt({ kind: "rename", entry }),
-      onMove: (entry) => setPrompt({ kind: "move", entry }),
       onDelete: (entry) => {
         setSelected(entry.path);
         setConfirmDelete({ entry });
@@ -1164,13 +1188,7 @@ export default function App() {
           ? { ...activeRootRef.current, path: root.remote.path } : activeRootRef.current)),
       onViewChanges: (entry) => {
         setMenu(null);
-        // 变更视图占的是编辑器那一块：先把这个文件打开（必要时经过未保存守卫），
-        // 守卫取消就什么都不做。
-        withGuard(() => {
-          const show = () => openDiff(entry.path);
-          if (openPathRef.current === entry.path) show();
-          else void openEntry({ path: entry.path }).then(show);
-        });
+        void openEntry(entry).then(() => { if (documents.active?.file.path === entry.path) openDiff(entry.path); });
       },
       onRevealInFolder: (entry) =>
         runHostAction("reveal", hostActionPath(entry.path, activeRootRef.current)),
@@ -1181,6 +1199,11 @@ export default function App() {
   // ── 渲染 ─────────────────────────────────────────────────────────────────
 
   const searchActive = query.trim().length > 0;
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const selectedTab = stripRef.current?.querySelector('[role="tab"][aria-selected="true"]');
+    selectedTab?.parentElement?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [openFile?.path, showPreview, previewTab?.path]);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col" style={{ background: "var(--bg)", color: "var(--fg)" }}>
@@ -1237,8 +1260,8 @@ export default function App() {
 
         {remoteReadOnly ? <span role="status" className="text-[10px]" style={{ color: "var(--muted)" }}>{t("remoteReadOnly")}</span> : null}
 
-        <span className="ml-auto flex flex-none items-center gap-1">
-          <IconButton label={t("refresh")} onClick={refreshTree}>
+        <span className="ml-auto flex max-w-full flex-wrap items-center gap-1">
+          <IconButton label={t("refresh")} onClick={() => { refreshTree(); if (gitOpen) setGitRefresh(n => n + 1); }}>
             <path d="M20 11a8 8 0 0 0-14.9-3.9L3 9" />
             <path d="M3 4v5h5" />
             <path d="M4 13a8 8 0 0 0 14.9 3.9L21 15" />
@@ -1253,35 +1276,39 @@ export default function App() {
             <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z" />
             <circle cx="12" cy="12" r="3" />
           </IconButton>
-          {/* 自动刷新（0.8.0）：文件在编辑器之外被改了自动重新读取。
-              监听不可用时整颗按钮禁用并说明原因——不给一个永远没反应的开关。
-              关掉之后两个手动刷新按钮照旧在。 */}
           <IconButton
-            label={
-              !watchAvailable
-                ? t("watchUnavailable")
-                : prefs.watchFiles
-                  ? t("watchOn")
-                  : t("watchOff")
-            }
-            active={prefs.watchFiles && watchAvailable}
-            disabled={remoteReadOnly || !watchAvailable}
+            label={remoteReadOnly ? t("remoteReadOnly") : !watchAvailable && prefs.watchFiles ? t("watchFallback") : prefs.watchFiles ? t("watchOn") : t("watchOff")}
+            active={prefs.watchFiles && !remoteReadOnly}
+            disabled={remoteReadOnly}
             onClick={() => persistPrefs({ watchFiles: !prefs.watchFiles })}
           >
-            <path d="M12 2v4" />
-            <path d="M12 18v4" />
-            <circle cx="12" cy="12" r="4" />
+            <path d="M4.5 11a7.5 7.5 0 1 1 1.8 6M4 6v5h5M12 8v4l3 2" />
           </IconButton>
         </span>
       </header>
 
       <div ref={bodyRef} className="flex min-h-0 flex-1">
-        {prefs.treeCollapsed ? null : (
-          <>
             <aside
-              className="flex min-h-0 min-w-0 flex-col"
+              className={prefs.treeCollapsed ? "hidden" : "flex min-h-0 min-w-0 flex-col"}
               style={{ width: `${prefs.splitRatio * 100}%`, background: "var(--surface)" }}
             >
+              {root && activeRoot && <div className={gitOpen ? "min-h-0 flex-1" : "hidden"} role="tabpanel" aria-label={t("gitChangesPanel")}>
+                {remoteReadOnly ? <p className="scm-guide">{t("remoteReadOnly")}</p> : <>
+                <GitPanel locale={hostLocale} workspacePath={root.path} rootPath={activeRoot.path} projectId={root.projectId}
+                  active={gitOpen && !prefs.treeCollapsed} refreshKey={gitRefresh} selection={previewTab}
+                  onInspect={commit => { setInspectedCommit(commit); setPreviewTab(null); }}
+                  onSelect={(item, revision) => { setInspectedCommit(null); setPreviewTab({ ...item, revision }); setShowPreview(true); }}
+                  onSnapshot={(entries, revision) => setPreviewTab(prev => {
+                    if (!prev) return null;
+                    const e = entries.find(e => e.path === prev.path);
+                    if (!e) return null;
+                    const staged = e.index !== "?" && e.index !== " ";
+                    const scope = (prev.scope === "staged" && staged) || e.worktree === " " ? "staged" : "worktree";
+                    return { path: prev.path, scope, revision };
+                  })} onChanged={() => { refreshTree(); if (diff) void loadDiff(diff.path); }} />
+                </>}
+              </div>}
+              <div className={gitOpen ? "hidden" : "flex min-h-0 flex-1 flex-col"} role="tabpanel" aria-label={t("treeSection")}>
               <div className="flex flex-none items-center gap-1.5 px-2.5 pb-1.5 pt-2">
                 <div className="relative flex min-w-0 flex-1 items-center">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--faint)", position: "absolute", left: 7 }} aria-hidden="true">
@@ -1310,11 +1337,11 @@ export default function App() {
                     </button>
                   ) : null}
                 </div>
-                <IconButton label={t("refresh")} small onClick={refreshSelectedDirectory}>
-                  <path d="M20 11a8 8 0 0 0-14.9-3.9L3 9" />
-                  <path d="M3 4v5h5" />
-                  <path d="M4 13a8 8 0 0 0 14.9 3.9L21 15" />
-                  <path d="M21 20v-5h-5" />
+                <IconButton label={t("expandAll")} small disabled={searchActive || expanding} onClick={() => void expandAll()}>
+                  <path d="m8 8 4-4 4 4M8 16l4 4 4-4" />
+                </IconButton>
+                <IconButton label={t("collapseAll")} small disabled={searchActive || (!expanding && !expanded.size)} onClick={collapseAll}>
+                  <path d="m8 4 4 4 4-4M8 20l4-4 4 4" />
                 </IconButton>
               </div>
 
@@ -1335,6 +1362,7 @@ export default function App() {
 
               {searchActive ? (
                 <div className="min-h-0 flex-1 overflow-auto px-1.5 pb-4" role="listbox" aria-label={t("search")}>
+                  {search.running && !search.hits.length && <Skeleton kind="list" label={t('searchScanning')} />}
                   {search.hits.length === 0 && !search.running ? (
                     <div className="px-3 py-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
                       {t("searchEmpty")}
@@ -1349,7 +1377,6 @@ export default function App() {
                       title={hit.path}
                       onClick={() => {
                         const path = hit.path;
-                        withGuard(() => {
                           setQuery("");
                           const segments = path.split("/");
                           const parents: string[] = [];
@@ -1369,7 +1396,6 @@ export default function App() {
                               await openEntry({ path, name: hit.name, isDirectory: false } as FileEntry);
                             })();
                           }
-                        });
                       }}
                       className="flex w-full cursor-pointer items-center gap-1.5 rounded-md border-0 px-2 py-[3px] text-left text-[12px] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg)]"
                       style={{ color: "var(--secondary)", minHeight: 24 }}
@@ -1385,6 +1411,8 @@ export default function App() {
                 </div>
               ) : (
                 <Tree
+                  key={activeRoot?.path}
+                  onMove={remoteReadOnly || saving ? undefined : moveEntry}
                   directories={directories}
                   expanded={expanded}
                   selected={selected}
@@ -1402,19 +1430,52 @@ export default function App() {
                   {t("ignoredHidden")}
                 </div>
               )}
+              </div>
             </aside>
 
-            <div
+            {!prefs.treeCollapsed && <div
               role="separator"
               aria-orientation="vertical"
               aria-label="Resize"
               onMouseDown={startResize}
               className="w-[3px] flex-none cursor-col-resize transition-colors hover:bg-[var(--surface-hover)]"
               style={{ background: "var(--border)" }}
-            />
-          </>
-        )}
+            />}
 
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {(openFile || previewTab || inspectedCommit) && <div ref={stripRef} role="tablist" aria-label={t('openDocuments')} className="fm-document-tabs">
+            {documents.tabs.map(({ file, dirty: modified }) => {
+              const name = baseNameOf(file.path);
+              const duplicate = documents.tabs.some(other => other.file.path !== file.path && baseNameOf(other.file.path) === name);
+              const label = duplicate ? `${name} — ${parentOf(file.path) || '.'}` : name;
+              const active = file.path === openFile?.path && !inspectedCommit && !(previewTab && showPreview);
+              return <div className="fm-file-tab" key={file.path} data-active={active}>
+                <PaneTab label={label} title={file.path} accessible={label + (modified ? ' •' : '')} dirty={modified}
+                  icon={<FileIcon name={name} isDirectory={false} size={13} />} active={active} onClick={() => void openEntry({ path: file.path })} />
+                <button type="button" className="fm-tab-close" title={`${t('close')} ${file.path}`} aria-label={`${t('close')} ${file.path}`} disabled={saving} onClick={() => closeTab(file.path)}>×</button>
+              </div>;
+            })}
+            {previewTab && <div className="fm-preview-tab" data-active={showPreview || !openFile}>
+              <PaneTab label={baseNameOf(previewTab.path)} title={`${previewTab.path} · ${t(previewTab.scope === "staged" ? "gitScopeStaged" : "gitScopeWorktree")}`}
+                accessible={`${baseNameOf(previewTab.path)} · ${t(previewTab.scope === "staged" ? "gitScopeStaged" : "gitScopeWorktree")}`}
+                detail={t(previewTab.scope === "staged" ? "indexTab" : "workingTab")} active={showPreview || !openFile} onClick={() => setShowPreview(true)} />
+              <button type="button" className="fm-tab-close" title={t("closeChanges")} aria-label={t("closeChanges")} onClick={() => setPreviewTab(null)}>
+                <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
+              </button>
+            </div>}
+          </div>}
+          {inspectedCommit && root && activeRoot && <section className="flex min-h-0 flex-1 flex-col" aria-label={inspectedCommit.subject}>
+            <header className="scm-actions"><span title={inspectedCommit.oid}>{inspectedCommit.oid.slice(0, 8)} · {inspectedCommit.subject}</span><IconButton small label={t('close')} onClick={() => setInspectedCommit(null)}><path d="m6 6 12 12M18 6 6 18" /></IconButton></header>
+            <div className="min-h-0 flex-1"><GitCommitDetail oid={inspectedCommit.oid} locale={hostLocale} workspacePath={root.path} projectId={root.projectId} rootPath={activeRoot.path} /></div>
+          </section>}
+          {previewTab && (showPreview || !openFile) && root && activeRoot && <div role="tabpanel" aria-label={previewTab.path} className="min-h-0 flex-1">
+            <GitPreview key={JSON.stringify([activeRoot.path, previewTab.path, previewTab.scope])} tab={previewTab} workspacePath={root.path} rootPath={activeRoot.path} projectId={root.projectId} t={t}
+              onClose={() => setPreviewTab(null)} onRefresh={() => setGitRefresh(n => n + 1)} />
+          </div>}
+          {openingPath && !inspectedCommit && !showPreview && <section aria-busy="true" aria-label={openingPath} className="min-h-0 flex-1 overflow-hidden">
+            <Skeleton kind={/\.pdf$/i.test(openingPath) ? 'page' : /\.(?:csv|tsv|xlsx|db|sqlite)$/i.test(openingPath) ? 'table' : 'lines'} label={`${t('loading')} ${baseNameOf(openingPath)}`} />
+          </section>}
+          <div className={openingPath || inspectedCommit || (previewTab && (showPreview || !openFile)) ? "hidden" : "flex min-h-0 flex-1"}>
         <EditorPane
           file={openFile}
           base={base}
@@ -1429,7 +1490,8 @@ export default function App() {
           tablePageSize={prefs.tablePageSize}
           t={t}
           handleRef={handleRef}
-          onDirty={() => setDirty(true)}
+          restore={documents.active?.editor}
+          onDirty={() => { if (openFile && !documents.get(openFile.path)?.dirty) documents.patch(openFile.path, { dirty: true }); }}
           onSave={() => void save()}
           onReload={reloadFromDisk}
           onViewerMode={changeViewerMode}
@@ -1442,6 +1504,14 @@ export default function App() {
           onCloseDiff={closeDiff}
           onRefreshDiff={() => diff && loadDiffRef.current(diff.path)}
         />
+          </div>
+        </div>
+      </div>
+      <div role="tablist" aria-label={t("projectFiles")} className="fm-activity-bar fm-list-switch">
+        <PaneTab label="" accessible={t("treeSection")} title={t("treeSection")} active={!gitOpen} icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 6h6l2 2h10v12H3z"/><path d="M5 4h6l2 2h6"/></svg>}
+          onClick={() => { setGitOpen(false); setShowPreview(false); setInspectedCommit(null); persistPrefs({ treeCollapsed: false }); }} />
+        <PaneTab label="" accessible={t("gitChangesPanel")} title={t("gitChangesPanel")} active={gitOpen} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="4" cy="3" r="1.6"/><circle cx="4" cy="13" r="1.6"/><circle cx="12" cy="4" r="1.6"/><path d="M4 5v6m0-1c5 0 8-1 8-4"/></svg>}
+          onClick={() => { setGitOpen(true); persistPrefs({ treeCollapsed: false }); }} />
       </div>
 
       {menu ? (
@@ -1458,7 +1528,7 @@ export default function App() {
         />
       ) : null}
 
-      {!root ? (
+      {ready && !root ? (
         <div className="absolute inset-0 flex items-center justify-center" style={{ background: "var(--bg)" }}>
           <div className="max-w-[32ch] text-center">
             <div className="mb-1 text-[15px] font-medium" style={{ color: "var(--fg)" }}>
@@ -1490,7 +1560,7 @@ export default function App() {
                 const next = pendingRef.current;
                 pendingRef.current = null;
                 setGuard(null);
-                setDirty(false);
+                // Discard only as part of the requested close, reload or workspace reset.
                 next?.();
               },
             },
@@ -1500,10 +1570,11 @@ export default function App() {
               onPick: () => {
                 const next = pendingRef.current;
                 pendingRef.current = null;
-                void save().then((ok) => {
-                  setGuard(null);
-                  if (ok) next?.();
-                });
+                const paths = guard.paths;
+                void (async () => {
+                  for (const path of paths) if (documents.get(path)?.dirty && !await save(undefined, path)) { setGuard(null); return; }
+                  setGuard(null); next?.();
+                })();
               },
             },
           ]}
@@ -1513,7 +1584,7 @@ export default function App() {
       {conflict ? (
         <ConfirmDialog
           title={t("conflictTitle")}
-          body={t("conflictBody", { name: openFile ? baseNameOf(openFile.path) : "" })}
+          body={t("conflictBody", { name: conflict.path })}
           actions={[
             { label: t("cancel"), onPick: () => setConflict(null) },
             {
@@ -1521,8 +1592,7 @@ export default function App() {
               variant: "danger",
               onPick: () => {
                 setConflict(null);
-                setDirty(false);
-                if (openFile) void openEntry({ path: openFile.path } as FileEntry);
+                void openEntry({ path: conflict.path }, false, true);
               },
             },
             {
@@ -1531,7 +1601,7 @@ export default function App() {
               onPick: () => {
                 const current = conflict;
                 setConflict(null);
-                void save({ mtimeMs: current.mtimeMs, size: current.size });
+                void save({ mtimeMs: current.mtimeMs, size: current.size }, current.path);
               },
             },
           ]}
@@ -1562,31 +1632,11 @@ export default function App() {
 
       {prompt ? (
         <PromptDialog
-          title={
-            prompt.kind === "newFolder"
-              ? t("newFolderTitle")
-              : prompt.kind === "newFile"
-                ? t("newFileTitle")
-                : prompt.kind === "rename"
-                  ? t("renameTitle")
-                  : t("moveTitle")
-          }
-          hint={
-            prompt.kind === "newFile" || prompt.kind === "newFolder"
-              ? t("createIn", { path: prompt.parent || "." })
-              : prompt.kind === "rename"
-                ? t("renameFrom", { path: prompt.entry.path })
-                : t("moveHint")
-          }
-          label={prompt.kind === "move" ? t("moveToLabel") : t("nameLabel")}
-          initialValue={
-            prompt.kind === "rename"
-              ? prompt.entry.name
-              : prompt.kind === "move"
-                ? parentOf(prompt.entry.path)
-                : ""
-          }
-          confirmLabel={prompt.kind === "rename" ? t("confirm") : prompt.kind === "move" ? t("move") : t("create")}
+          title={t(prompt.kind === "rename" ? "renameTitle" : prompt.kind === "newFile" ? "newFileTitle" : "newFolderTitle")}
+          hint={prompt.kind === "rename" ? t("renameFrom", { path: prompt.entry.path }) : t("createIn", { path: prompt.parent || "." })}
+          label={t("nameLabel")}
+          initialValue={prompt.kind === "rename" ? prompt.entry.name : ""}
+          confirmLabel={t(prompt.kind === "rename" ? "confirm" : "create")}
           t={t}
           onCancel={() => setPrompt(null)}
           onSubmit={(value) => void onPromptSubmit(value)}
@@ -1596,44 +1646,24 @@ export default function App() {
   );
 }
 
-function IconButton({
-  children,
-  label,
-  onClick,
-  disabled,
-  active,
-  small,
-}: {
-  children: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  active?: boolean;
-  small?: boolean;
+function PaneTab({ label, title, active, onClick, accessible, detail, dirty, icon }: {
+  label: string; title?: string; active: boolean; onClick: () => void; accessible?: string;
+  detail?: string; dirty?: boolean; icon?: React.ReactNode;
 }) {
-  const size = small ? 24 : 28;
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      disabled={disabled}
-      onClick={onClick}
-      className="inline-flex flex-none items-center justify-center rounded-xl border-0 bg-transparent transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg)] disabled:cursor-default disabled:opacity-40"
-      style={{
-        width: size,
-        height: size,
-        color: active ? "var(--fg)" : "var(--secondary)",
-        background: active ? "var(--surface-active)" : undefined,
-      }}
-    >
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        {children}
-      </svg>
-    </button>
-  );
+  return <button type="button" role="tab" aria-selected={active} aria-label={accessible ?? label} tabIndex={active ? 0 : -1}
+    title={title ?? label} className="fm-tab" onClick={onClick} onKeyDown={event => {
+      const list = event.currentTarget.closest('[role="tablist"]');
+      if (!list || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      const tabs = Array.from(list.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      const index = tabs.indexOf(event.currentTarget);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+      event.preventDefault(); tabs[next].focus(); tabs[next].click();
+    }}>
+    {icon}<span className="fm-tab-name">{label}</span>{dirty && <span className="fm-dirty-dot" aria-hidden="true" />}
+    {detail && <span className="fm-tab-detail">{detail}</span>}
+  </button>;
 }
+
 
 /** 菜单里的「当前就在看这个」：与树里的展开箭头同一套线条风格。 */
 function CheckGlyph() {

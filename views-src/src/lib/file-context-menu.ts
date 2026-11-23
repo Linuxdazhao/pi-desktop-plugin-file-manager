@@ -33,7 +33,7 @@ export type FileContextMenuLabels = {
   newFile: string;
   newFolder: string;
   rename: string;
-  move: string;
+  copyPath: string;
   delete: string;
   copyRelativePath: string;
   copyAbsolutePath: string;
@@ -51,7 +51,6 @@ export type FileContextMenuOptions<T extends FileContextMenuTarget> = {
   onNewFile: (parent: string) => void;
   onNewFolder: (parent: string) => void;
   onRename: (target: T) => void;
-  onMove: (target: T) => void;
   onDelete: (target: T) => void;
   onCopyRelativePath: (target: T) => void;
   onCopyAbsolutePath: (target: T) => void;
@@ -60,107 +59,46 @@ export type FileContextMenuOptions<T extends FileContextMenuTarget> = {
   onRefresh: (directory: string) => void;
 };
 
-/**
- * Build the tree context menu in stable action groups. Missing-target actions
- * are omitted, so a blank-area menu contains only create and refresh actions.
- */
+/** Create in the clicked folder (or root); keep item menus focused on the item. */
 export function buildFileContextMenuEntries<T extends FileContextMenuTarget>(
   options: FileContextMenuOptions<T>,
 ): MenuEntry[] {
-  const { target, labels } = options;
-  const isDirectory = target?.isDirectory === true;
-  const parent = target ? (isDirectory ? target.path : parentOf(target.path)) : "";
+  const { target, labels, readOnly, openWithEntries } = options;
   const sections: MenuEntry[][] = [];
-
-  if (target && !options.readOnly) {
+  if (!readOnly && (!target || target.isDirectory)) {
+    const parent = target?.path ?? "";
     sections.push([
-      {
-        kind: "submenu",
-        id: "openWith",
-        label: labels.openWithSubmenu,
-        items: options.openWithEntries,
-      },
+      { kind: "item", label: labels.newFile, onPick: () => options.onNewFile(parent) },
+      { kind: "item", label: labels.newFolder, onPick: () => options.onNewFolder(parent) },
     ]);
   }
+  if (!target) {
+    sections.push([{ kind: "item", label: labels.refresh, onPick: () => options.onRefresh("") }]);
+  } else {
+    const paths: MenuEntry[] = [
+      { kind: "item", label: labels.copyRelativePath, onPick: () => options.onCopyRelativePath(target) },
+      { kind: "item", label: labels.copyAbsolutePath, onPick: () => options.onCopyAbsolutePath(target) },
+    ];
+    // On SSH these are the only two actions; no need to make users open a submenu.
+    if (readOnly) return paths;
 
-  if (!options.readOnly) sections.push([
-    {
-      kind: "item",
-      label: labels.newFile,
-      onPick: () => options.onNewFile(parent),
-    },
-    {
-      kind: "item",
-      label: labels.newFolder,
-      onPick: () => options.onNewFolder(parent),
-    },
-  ]);
-
-  if (target) {
-    if (!options.readOnly) sections.push([
-      {
-        kind: "item",
-        label: labels.rename,
-        onPick: () => options.onRename(target),
-      },
-      {
-        kind: "item",
-        label: labels.move,
-        onPick: () => options.onMove(target),
-      },
-      {
-        kind: "item",
-        label: labels.delete,
-        danger: true,
-        onPick: () => options.onDelete(target),
-      },
-    ]);
-
-    sections.push([
-      {
-        kind: "item",
-        label: labels.copyRelativePath,
-        onPick: () => options.onCopyRelativePath(target),
-      },
-      {
-        kind: "item",
-        label: labels.copyAbsolutePath,
-        onPick: () => options.onCopyAbsolutePath(target),
-      },
-    ]);
-
-    if (!isDirectory && !options.readOnly) {
-      const fileActions: MenuEntry[] = [];
-      if (target.git) {
-        fileActions.push({
-          kind: "item",
-          label: labels.viewChanges,
-          onPick: () => options.onViewChanges(target),
-        });
-      }
-      fileActions.push({
-        kind: "item",
-        label: labels.revealInFolder,
-        onPick: () => options.onRevealInFolder(target),
-      });
-      sections.push(fileActions);
+    const open: MenuEntry[] = [];
+    if (openWithEntries.some((entry) => entry.kind !== "separator" && !entry.disabled)) {
+      open.push({ kind: "submenu", id: "openWith", label: labels.openWithSubmenu, items: openWithEntries });
     }
+    if (!target.isDirectory) {
+      open.push({ kind: "item", label: labels.revealInFolder, onPick: () => options.onRevealInFolder(target) });
+      if (target.git) open.push({ kind: "item", label: labels.viewChanges, onPick: () => options.onViewChanges(target) });
+    }
+    if (open.length) sections.push(open);
+    sections.push([
+      { kind: "submenu", id: "copyPath", label: labels.copyPath, items: paths },
+      { kind: "item", label: labels.rename, onPick: () => options.onRename(target) },
+    ], [
+      { kind: "item", label: labels.delete, danger: true, onPick: () => options.onDelete(target) },
+    ]);
   }
-
-  sections.push([
-    {
-      kind: "item",
-      label: labels.refresh,
-      onPick: () => options.onRefresh(parent),
-    },
-  ]);
-
   return sections.flatMap((section, index) =>
     index === 0 ? section : [{ kind: "separator" as const }, ...section],
   );
-}
-
-function parentOf(path: string): string {
-  const separator = path.lastIndexOf("/");
-  return separator === -1 ? "" : path.slice(0, separator);
 }

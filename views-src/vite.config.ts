@@ -21,7 +21,7 @@ function fileProtocolCompat(): Plugin {
   return {
     name: "file-protocol-compat",
     transformIndexHtml(html) {
-      return html
+      return html.replace(/\r\n/g, "\n")
         .replace(
           /<script type="module" crossorigin src="([^"]+)"><\/script>/g,
           '<script src="$1" defer></script>',

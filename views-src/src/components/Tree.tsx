@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileEntry } from "../lib/rpc";
 import { FileIcon } from "../lib/fileIcons";
+import { Skeleton } from './Skeleton';
 import { formatSize } from "../lib/format";
 import type { T } from "../i18n";
 import { gitColor, gitGlyph, gitTitle } from "../lib/git";
+import { canMoveTo, movableEntry } from "../lib/tree-move";
+
+const DRAG_TYPE = "application/x-pi-file-manager-tree-move";
+const dropOutline = { outline: "2px solid var(--accent)", outlineOffset: -2 };
 
 export type DirState = {
   loading?: boolean;
@@ -20,6 +25,7 @@ type Props = {
   onToggle: (path: string) => void;
   onOpen: (entry: FileEntry) => void;
   onRefreshDir: (path: string) => void;
+  onMove?: (entry: FileEntry, targetDirectory: string) => void;
   onContextMenu: (event: React.MouseEvent, entry: FileEntry | null) => void;
 };
 
@@ -75,6 +81,7 @@ export function Tree({
   onToggle,
   onOpen,
   onRefreshDir,
+  onMove,
   onContextMenu,
 }: Props) {
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -82,6 +89,25 @@ export function Tree({
     () => buildRows("", 0, directories, expanded, showIgnored, t),
     [directories, expanded, showIgnored, t],
   );
+  const [drag, setDrag] = useState<{ entry: FileEntry; rows: Row[]; token: string } | null>(null);
+  const [highlight, setHighlight] = useState<string | null>(null);
+  // A refresh/root switch changes the rows snapshot, even for identically named files.
+  const activeDrag = onMove && drag?.rows === rows ? drag : null;
+  useEffect(() => {
+    if (drag && !activeDrag) { setDrag(null); setHighlight(null); }
+  }, [drag, activeDrag]);
+
+  const finishDrag = () => { setDrag(null); setHighlight(null); };
+  const destination = (event: React.DragEvent<HTMLDivElement>): string | null => {
+    if (!activeDrag || !event.dataTransfer.types.includes(DRAG_TYPE)) return null;
+    const node = event.target as Element;
+    const rowIndex = node.closest<HTMLElement>("[data-row-index]")?.dataset.rowIndex;
+    const row = rowIndex === undefined ? null : rows[Number(rowIndex)];
+    const atRoot = node === event.currentTarget || !!node.closest("[data-root-drop]");
+    if (!atRoot && row?.kind !== "entry") return null;
+    const target = row?.kind === "entry" ? row.entry : null;
+    return canMoveTo(activeDrag.entry, target) ? target?.path ?? "" : null;
+  };
 
   // 选中项滚入视野——搜索跳转之后需要它。
   useEffect(() => {
@@ -153,6 +179,25 @@ export function Tree({
       aria-label={t("treeSection")}
       aria-busy={!directories.has("") || directories.get("")?.loading === true}
       className="min-h-0 flex-1 overflow-auto px-1.5 pb-4"
+      onDragOver={(event) => {
+        event.preventDefault(); // Also prevent native file/URL navigation for foreign payloads.
+        const path = destination(event);
+        event.dataTransfer.dropEffect = path === null ? "none" : "move";
+        setHighlight(path);
+      }}
+      onDragLeave={(event) => {
+        if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setHighlight(null);
+      }}
+      onDragEnd={finishDrag}
+      onDrop={(event) => {
+        event.preventDefault();
+        const path = destination(event);
+        finishDrag();
+        // Never read paths from dataTransfer. Only this particular drag may consume the in-memory entry.
+        if (activeDrag && path !== null && event.dataTransfer.getData(DRAG_TYPE) === activeDrag.token) {
+          onMove?.(activeDrag.entry, path);
+        }
+      }}
       onContextMenu={(event) => {
         // 空白处右键：不带条目，菜单只提供「在此新建」与刷新。
         if ((event.target as HTMLElement).closest(".tree-row")) return;
@@ -162,6 +207,7 @@ export function Tree({
     >
       {rows.map((row, index) => {
         if (row.kind === "note") {
+          if (!row.error && row.text === t('loading')) return <div key={`loading:${row.path}`} style={{ paddingLeft: row.depth * 14 }}><Skeleton kind="list" compact={row.depth > 0} label={t('loading')} /></div>;
           return (
             <div
               key={`note:${row.path}:${row.text}`}
@@ -171,16 +217,6 @@ export function Tree({
                 color: row.error ? "var(--danger)" : "var(--muted)",
               }}
             >
-              {row.text === t("loading") ? (
-                <span
-                  aria-hidden="true"
-                  className="inline-block h-[11px] w-[11px] flex-none animate-spin rounded-full border-[1.5px]"
-                  style={{
-                    borderColor: "var(--border-strong)",
-                    borderTopColor: "var(--secondary)",
-                  }}
-                />
-              ) : null}
               <span className="min-w-0">{row.text}</span>
               {row.error ? (
                 <button
@@ -222,6 +258,15 @@ export function Tree({
               .filter(Boolean)
               .join(" — ")}
             disabled={entry.isSymlink}
+            draggable={!!onMove && movableEntry(entry)}
+            onDragStart={(event) => {
+              if (!onMove || !movableEntry(entry)) { event.preventDefault(); return; }
+              const token = crypto.randomUUID();
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData(DRAG_TYPE, token);
+              setHighlight(null);
+              setDrag({ entry, rows, token });
+            }}
             onClick={() => activate(row)}
             onKeyDown={(event) => onKeyDown(event, index, row)}
             onContextMenu={(event) => {
@@ -230,7 +275,10 @@ export function Tree({
               onContextMenu(event, entry);
             }}
             className="tree-row"
-            style={{ paddingLeft: 6 + row.depth * 14 }}
+            style={{ paddingLeft: 6 + row.depth * 14,
+              ...(activeDrag && highlight === entry.path ? dropOutline : {}),
+              opacity: activeDrag?.entry === entry ? 0.55 : undefined,
+            }}
           >
             <span
               aria-hidden="true"
@@ -292,6 +340,12 @@ export function Tree({
           </button>
         );
       })}
+      {activeDrag && canMoveTo(activeDrag.entry, null) ? (
+        <div data-root-drop="" className="sticky bottom-0 rounded border border-dashed px-2 py-1 text-center text-xs"
+          style={{ background: "var(--surface)", borderColor: "var(--border-strong)", ...(highlight === "" ? dropOutline : {}) }}>
+          {t("dropAtRoot")}
+        </div>
+      ) : null}
     </div>
   );
 }

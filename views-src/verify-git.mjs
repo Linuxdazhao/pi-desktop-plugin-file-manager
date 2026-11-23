@@ -19,7 +19,7 @@
 
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -46,7 +46,7 @@ function hasGit() {
     execFileSync("git", ["--version"], { stdio: "ignore" });
     return true;
   } catch {
-check("六条记录（重命名只算一条）", porcelain.length === 6, `got ${porcelain.length}`);
+    return false;
   }
 }
 
@@ -279,6 +279,10 @@ if (!hasGit()) {
 } else {
   const root = mkdtempSync(join(tmpdir(), "pifm-git-"));
   try {
+    // Fresh Git identity/config, never the developer's hooks, aliases, credentials or index.
+    for (const key of Object.keys(process.env)) if (/^GIT_/i.test(key)) delete process.env[key];
+    process.env.HOME = process.env.USERPROFILE = process.env.XDG_CONFIG_HOME = root;
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
     const repo = join(root, "repo");
     mkdirSync(join(repo, "src"), { recursive: true });
     mkdirSync(join(repo, "docs"), { recursive: true });
@@ -301,7 +305,7 @@ if (!hasGit()) {
     rmSync(join(repo, "gone.txt"));
     writeFileSync(join(repo, "clean.txt"), "clean\ntouched\n");
     git(repo, ["add", "clean.txt"]);
-    const settings = { fmPrefs: {} };
+    let settings = { fmPrefs: {} };
     const workspace = { path: repo, name: "repo" };
     globalThis.pi = {
       workspace: { get: async () => workspace },
@@ -455,6 +459,97 @@ if (!hasGit()) {
     const diffAfterSave = await onPanelInvoke("fm.git.diff", { path: "src/a.ts" });
     check("保存后的差异里能看到新加的那一行", diffAfterSave.sections[0].hunks[0].lines.some((line) => line.text === "four"));
 
+    console.log("\nChanges panel: scoped Git mutations against a real, isolated repository");
+    const scope = () => ({ workspacePath: workspace.path, rootPath: workspace.path, projectId: workspace.projectId });
+    const changes = () => onPanelInvoke("fm.git.changes", scope());
+    const action = (op, state, extra = {}) => onPanelInvoke(`fm.git.${op}`, { ...scope(), revision: state.revision, ...extra });
+    const success = (label, result) => check(label, result.ok === true, JSON.stringify(result));
+    git(repo, ["reset", "-q", "HEAD", "--", "."]);
+    rmSync(join(repo, "big.txt"));
+    const literal = "-only[1].txt";
+    writeFileSync(join(repo, literal), "one\n");
+    writeFileSync(join(repo, "-only1.txt"), "other\n");
+    writeFileSync(join(repo, ".env.local"), "synthetic fixture\n");
+    let s = await changes();
+    success("changes list", s);
+    check("deleted and untracked files are selectable, credential names are hidden", s.hidden && s.entries.some(e => e.path === "gone.txt" && e.worktree === "D") && s.entries.some(e => e.path === literal && e.index === "?") && !JSON.stringify(s).includes(".env.local"));
+    for (const path of [".", "..", "src", "*", ":(glob)**", ".env.local", "src/../clean.txt"]) check(`denied stage: ${path}`, !(await action("stage", s, { path })).ok);
+    writeFileSync(join(repo, literal), "reviewed content changed\n");
+    check("stale disk snapshot cannot stage changed bytes", (await action("stage", s, { path: literal })).code === "GIT_STALE");
+    s = await changes();
+    success("stage exactly the literal option-looking path", await action("stage", s, { path: literal }));
+    check("other paths left unstaged", git(repo, ["diff", "--cached", "--name-only"]).trim() === literal);
+    writeFileSync(join(repo, literal), "two\n");
+    s = await changes();
+    check("partial staging represented in both columns", s.entries.some(e => e.path === literal && e.index === "A" && e.worktree === "M"));
+    const both = await action("panelDiff", s, { path: literal });
+    check("partial diff has staged and worktree sections", both.ok && both.sections.length === 2);
+    success("unstage without touching worktree", await action("unstage", s, { path: literal }));
+    check("unstage preserved bytes", readFileSync(join(repo, literal), "utf8") === "two\n" && !git(repo, ["diff", "--cached", "--name-only"]));
+    rmSync(join(repo, "docs"), { recursive: true });
+    s = await changes();
+    check("diff supports deleted parent directory", (await action("panelDiff", s, { path: "docs/readme.md" })).sections?.[0]?.hunks[0]?.lines[0].type === "del");
+    success("stage deletion", await action("stage", s, { path: "docs/readme.md" }));
+    s = await changes();
+    success("unstage deletion", await action("unstage", s, { path: "docs/readme.md" }));
+    success("stage new file for commit", await action("stage", await changes(), { path: literal }));
+    s = await changes();
+    const head = git(repo, ["rev-parse", "HEAD"]);
+    git(repo, ["add", "--", ".env.local"]);
+    check("stale reviewed index rejected", (await action("commit", s, { message: "stale" })).code === "GIT_STALE");
+    s = await changes();
+    check("protected staged entry blocks entire commit", s.blocked && (await action("commit", s, { message: "blocked" })).code === "GIT_INDEX_BLOCKED" && git(repo, ["rev-parse", "HEAD"]) === head);
+    git(repo, ["reset", "-q", "HEAD", "--", ".env.local"]);
+    s = await changes();
+    check("empty commit message rejected", (await action("commit", s, { message: " \n " })).code === "GIT_MESSAGE");
+    workspace.sessionId = "another-session";
+    check("stale host session cannot mutate", (await action("unstage", s, { path: literal })).code === "GIT_STALE");
+    workspace.projectId = "another-project";
+    check("stale project/root cannot mutate", !(await onPanelInvoke("fm.git.unstage", { workspacePath: repo, rootPath: repo, revision: s.revision, path: literal })).ok);
+    delete workspace.projectId; delete workspace.sessionId;
+    writeFileSync(join(repo, literal), "not staged\n");
+    s = await changes();
+    success("commit only reviewed staged version", await action("commit", s, { message: "-m literal message\n\nbody" }));
+    check("HEAD contains staged bytes only", git(repo, ["show", `HEAD:${literal}`]) === "two\n" && git(repo, ["diff-tree", "--no-commit-id", "-r", "--name-only", "HEAD"]).trim() === literal);
+    workspace.path = join(repo, "src");
+    check("nested workspace cannot mutate enclosing repository", (await changes()).code === "GIT_REPO_ROOT");
+    workspace.path = repo;
+    workspace.roots = [{path: repo, primary: true}, {path: join(repo, "src")}];
+    git(repo, ["add", "--", "src/a.ts"]);
+    s = await changes();
+    check("nested registered root is invisible and blocks a whole-index commit", s.blocked && !s.entries.some(e => e.path.startsWith("src/")) && !(await action("commit", s, {message:"blocked"})).ok);
+    git(repo, ["reset", "-q", "HEAD", "--", "src/a.ts"]);
+    delete workspace.roots;
+    symlinkSync(root, join(repo, "linked-out"), process.platform === "win32" ? "junction" : "dir");
+    s = await changes();
+    check("junctions and their descendants cannot be staged or diffed", !(await action("stage", s, {path:"linked-out"})).ok && !(await action("panelDiff", s, {path:"linked-out/repo/.env.local"})).ok);
+    rmSync(join(repo, "linked-out"));
+    // Stage a symlink directly in the index; safe even on Windows without symlink privileges.
+    const blob = git(repo, ["rev-parse", `HEAD:${literal}`]).trim();
+    git(repo, ["update-index", "--add", "--cacheinfo", `120000,${blob},link-in-index`]);
+    s = await changes();
+    check("index-only symlink blocks commit", s.blocked && !(await action("commit", s, {message:"blocked"})).ok);
+    workspace.path = join(root, "unborn");
+    mkdirSync(workspace.path); git(workspace.path, ["init", "-q", "-b", "main"]);
+    writeFileSync(join(workspace.path, "new.txt"), "first\n");
+    success("stage in unborn repo", await action("stage", await changes(), { path:"new.txt" }));
+    success("unstage in unborn repo", await action("unstage", await changes(), { path:"new.txt" }));
+    success("restage in unborn repo", await action("stage", await changes(), { path:"new.txt" }));
+    git(workspace.path, ["config", "user.email", "test@example.invalid"]); git(workspace.path, ["config", "user.name", "test"]);
+    success("create initial commit", await action("commit", await changes(), { message:"initial" }));
+    check("initial commit left worktree clean", git(workspace.path, ["status", "--porcelain"]) === "");
+
+    const first = workspace.path;
+    git(first, ["config", "filter.fixture.clean", "false"]);
+    writeFileSync(join(first, ".gitattributes"), "new.txt filter=fixture\n");
+    writeFileSync(join(first, "new.txt"), "second\n");
+    s = await changes();
+    check("custom filter cannot run while staging", s.ok && (await action("stage", s, {path:"new.txt"})).code === "GIT_FILTER");
+    git(first, ["config", "user.useConfigOnly", "true"]); git(first, ["config", "--unset", "user.name"]); git(first, ["config", "--unset", "user.email"]);
+    success("stage unaffected file in filtered repository", await action("stage", s, {path:".gitattributes"}));
+    const noIdentity = await action("commit", await changes(), {message:"identity needed"});
+    check("missing author explains how to fix identity", !noIdentity.ok && /user\.(name|email)|identity/i.test(noIdentity.message));
+
     console.log("\n10. 不是仓库的文件夹：降级成「没有状态」，其余照旧");
     const plain = join(root, "plain");
     mkdirSync(plain, { recursive: true });
@@ -465,9 +560,19 @@ if (!hasGit()) {
     check("列表照常返回", plainListing.ok === true && plainListing.entries.length === 1);
     check("git 不可用时只是没有状态", plainListing.git?.available === false && plainListing.entries[0].git === null);
     const plainDiff = await onPanelInvoke("fm.git.diff", { path: "a.txt" });
+    check("non-repository changes panel has actionable error", (await changes()).code === "GIT_REPO_ROOT");
     check("差异请求明确说不可用", plainDiff.ok === false && plainDiff.code === "GIT_UNAVAILABLE", JSON.stringify(plainDiff));
     const plainRead = await onPanelInvoke("fm.read", { path: "a.txt" });
     check("读文件照旧", plainRead.ok === true && plainRead.text === "a\n");
+    // Isolate a missing executable on machines with Git installed in fallback locations.
+    const report = execFileSync(process.execPath, ["-e", `
+      require('node:child_process').spawn = () => { throw Object.assign(new Error('missing Git'), {code:'ENOENT'}) };
+      const {onPanelInvoke} = require(${JSON.stringify(pluginMain)});
+      const path = ${JSON.stringify(plain)}; global.pi = {workspace:{get:async()=>({path})}};
+      (async()=>console.log(JSON.stringify(await Promise.all([onPanelInvoke('fm.git.changes',{workspacePath:path,rootPath:path}), onPanelInvoke('fm.read',{path:'a.txt'})]))))();
+    `], { encoding:"utf8" });
+    const [missing, stillReadable] = JSON.parse(report);
+    check("no git: actionable panel error, ordinary read still works", missing.code === "GIT_UNAVAILABLE" && stillReadable.text === "a\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

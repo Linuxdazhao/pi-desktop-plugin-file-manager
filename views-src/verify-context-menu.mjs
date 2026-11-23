@@ -9,22 +9,24 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const temp = mkdtempSync(join(tmpdir(), "pifm-context-menu-"));
-const output = join(temp, "file-context-menu.mjs");
+const modulePath = (name) => pathToFileURL(join(temp, `${name}.mjs`)).href;
 
 try {
   await build({
-    entryPoints: [join(here, "src/lib/file-context-menu.ts")],
+    entryPoints: ["file-context-menu", "tree-move"].map(name => join(here, `src/lib/${name}.ts`)),
     bundle: true,
     format: "esm",
     platform: "node",
-    outfile: output,
+    outdir: temp,
+    outExtension: { ".js": ".mjs" },
   });
-  const { buildFileContextMenuEntries, withBuiltInBrowserEntry } = await import(pathToFileURL(output).href);
+  const { buildFileContextMenuEntries, withBuiltInBrowserEntry } = await import(modulePath("file-context-menu"));
+  const { canMoveTo, movableEntry } = await import(modulePath("tree-move"));
   const labels = {
     newFile: "New File",
     newFolder: "New Folder",
     rename: "Rename",
-    move: "Move",
+    copyPath: "Copy Path",
     delete: "Delete",
     copyRelativePath: "Copy Relative Path",
     copyAbsolutePath: "Copy Absolute Path",
@@ -69,87 +71,62 @@ try {
     openWithEntries,
   );
 
-  const blank = buildFileContextMenuEntries({
-    target: null,
-    labels,
-    openWithEntries: [],
-    onNewFile() {}, onNewFolder() {}, onRename() {}, onMove() {}, onDelete() {},
-    onCopyRelativePath() {}, onCopyAbsolutePath() {}, onViewChanges() {},
-    onRevealInFolder() {}, onRefresh() {},
-  });
-  assert.deepEqual(names(blank), ["New File", "New Folder", "|", "Refresh"]);
-
-  const file = {
-    path: "src/index.html",
-    isDirectory: false,
-    git: { status: "modified" },
-  };
   const calls = [];
-  const entries = buildFileContextMenuEntries({
-    target: file,
-    labels,
-    openWithEntries,
-    onNewFile: (parent) => calls.push(["newFile", parent]),
-    onNewFolder: (parent) => calls.push(["newFolder", parent]),
-    onRename: (target) => calls.push(["rename", target.path]),
-    onMove: (target) => calls.push(["move", target.path]),
-    onDelete: (target) => calls.push(["delete", target.path]),
-    onCopyRelativePath: (target) => calls.push(["copyRelative", target.path]),
-    onCopyAbsolutePath: (target) => calls.push(["copyAbsolute", target.path]),
-    onViewChanges: (target) => calls.push(["viewChanges", target.path]),
-    onRevealInFolder: (target) => calls.push(["reveal", target.path]),
-    onRefresh: (directory) => calls.push(["refresh", directory]),
-  });
+  const track = (key) => (arg) => calls.push([key, typeof arg === "string" ? arg : arg.path]);
+  const options = {
+    labels, openWithEntries,
+    onNewFile: track("file"), onNewFolder: track("folder"), onRename: track("rename"), onDelete: track("delete"),
+    onCopyRelativePath: track("relative"), onCopyAbsolutePath: track("absolute"),
+    onViewChanges: track("changes"), onRevealInFolder: track("reveal"), onRefresh: track("refresh"),
+  };
+  const menu = (target, overrides) => buildFileContextMenuEntries({ ...options, target, ...overrides });
+  const blank = menu(null);
+  assert.deepEqual(names(blank), ["New File", "New Folder", "|", "Refresh"]);
+  blank.filter(e => e.kind === "item").forEach(e => e.onPick());
+  assert.deepEqual(calls.splice(0), [["file", ""], ["folder", ""], ["refresh", ""]]);
+
+  const entry = (path, isDirectory = false) => ({ name: path.split("/").pop(), path, isDirectory });
+  const file = { ...entry("src/index.html"), git: { status: "modified" } };
+  const entries = menu(file);
   assert.deepEqual(names(entries), [
-    "Open With…", "|", "New File", "New Folder", "|", "Rename", "Move", "Delete",
-    "|", "Copy Relative Path", "Copy Absolute Path", "|", "View Changes",
-    "Reveal in Folder", "|", "Refresh",
+    "Open With…", "Reveal in Folder", "View Changes", "|", "Copy Path", "Rename", "|", "Delete",
   ]);
-  assert.equal(entries[0].kind, "submenu");
-  assert.deepEqual(entries[0].items, openWithEntries);
-  entries.find((entry) => entry.kind === "item" && entry.label === "New File").onPick();
-  entries.find((entry) => entry.kind === "item" && entry.label === "Refresh").onPick();
-  assert.deepEqual(calls, [["newFile", "src"], ["refresh", "src"]]);
+  assert.equal(entries[0].id, "openWith");
+  assert.equal(entries[0].items, openWithEntries);
+  const paths = entries.find(e => e.id === "copyPath").items;
+  assert.deepEqual(names(paths), ["Copy Relative Path", "Copy Absolute Path"]);
+  paths.forEach(e => e.onPick());
+  entries.filter(e => e.kind === "item").forEach(e => e.onPick());
+  assert.deepEqual(calls.splice(0), ["relative", "absolute", "reveal", "changes", "rename", "delete"].map(s => [s, file.path]));
+  assert.equal(entries.at(-1).danger, true);
+  assert(!names(menu({ ...file, git: null })).includes("View Changes"));
 
-  const directory = { path: "src/assets", isDirectory: true, git: null };
-  const directoryCalls = [];
-  const directoryEntries = buildFileContextMenuEntries({
-    target: directory,
-    labels,
-    openWithEntries,
-    onNewFile: (parent) => directoryCalls.push(parent),
-    onNewFolder() {}, onRename() {}, onMove() {}, onDelete() {},
-    onCopyRelativePath() {}, onCopyAbsolutePath() {}, onViewChanges() {},
-    onRevealInFolder() {}, onRefresh: (parent) => directoryCalls.push(`refresh:${parent}`),
-  });
-  directoryEntries.find((entry) => entry.kind === "item" && entry.label === "New File").onPick();
-  directoryEntries.find((entry) => entry.kind === "item" && entry.label === "Refresh").onPick();
-  assert.deepEqual(directoryCalls, ["src/assets", "refresh:src/assets"]);
-  assert.equal(directoryEntries.some((entry) => entry.kind === "item" && entry.label === "View Changes"), false);
-  assert.equal(directoryEntries.some((entry) => entry.kind === "item" && entry.label === "Reveal in Folder"), false);
+  const dir = entry("src/assets", true);
+  const directory = menu(dir);
+  assert.deepEqual(names(directory), ["New File", "New Folder", "|", "Open With…", "|", "Copy Path", "Rename", "|", "Delete"]);
+  directory.slice(0, 2).forEach(e => e.onPick());
+  assert.deepEqual(calls.splice(0), [["file", dir.path], ["folder", dir.path]]);
+  assert(!names(menu(dir, { openWithEntries: [{ ...openWithEntries[0], disabled: true }] })).includes("Open With…"));
+  for (const target of [file, dir]) {
+    assert.deepEqual(names(menu(target, { readOnly: true })), ["Copy Relative Path", "Copy Absolute Path"]);
+  }
+  assert.deepEqual(names(menu(null, { readOnly: true })), ["Refresh"]);
 
-  const cleanFile = { ...file, git: null };
-  const cleanEntries = buildFileContextMenuEntries({
-    target: cleanFile,
-    labels,
-    openWithEntries,
-    onNewFile() {}, onNewFolder() {}, onRename() {}, onMove() {}, onDelete() {},
-    onCopyRelativePath() {}, onCopyAbsolutePath() {}, onViewChanges() {},
-    onRevealInFolder() {}, onRefresh() {},
-  });
-  assert.equal(cleanEntries.some((entry) => entry.kind === "item" && entry.label === "View Changes"), false);
-  assert.equal(cleanEntries.some((entry) => entry.kind === "item" && entry.label === "Reveal in Folder"), true);
-
-  const remote = buildFileContextMenuEntries({
-    target: cleanFile, labels, readOnly: true, openWithEntries,
-    onNewFile() { assert.fail("remote create"); }, onNewFolder() { assert.fail("remote mkdir"); },
-    onRename() { assert.fail("remote rename"); }, onMove() { assert.fail("remote move"); }, onDelete() { assert.fail("remote delete"); },
-    onCopyRelativePath() {}, onCopyAbsolutePath() {}, onViewChanges() { assert.fail("remote git"); },
-    onRevealInFolder() { assert.fail("remote local reveal"); }, onRefresh() {},
-  });
-  assert.deepEqual(names(remote), ["Copy Relative Path", "Copy Absolute Path", "|", "Refresh"]);
-
-  console.log("Context menu grouping, applicability, and action targets passed.");
+  const src = entry("src", true);
+  assert(canMoveTo(file, dir));
+  assert(canMoveTo(file, null)); // nested file to project root
+  assert(canMoveTo(dir, null));
+  assert(canMoveTo(src, entry("src-other", true)));
+  for (const [source, target] of [
+    [src, null], [file, src], [src, src], [src, dir], [dir, file],
+    [{ ...file, outside: true }, dir], [file, { ...dir, outside: true }],
+    [{ ...file, isSymlink: true }, dir], [file, { ...dir, isSymlink: true }],
+    [entry("node_modules/pkg"), dir], [file, entry("lib/node_modules/pkg", true)],
+  ]) assert(!canMoveTo(source, target), `invalid move ${source.path} to ${target?.path ?? "root"}`);
+  for (const path of ["", ".", "../sibling", "/outside", "D:drive", "src//file", "dir\\escape"]) {
+    assert(!movableEntry(entry(path)), `invalid source: ${path}`);
+  }
+  console.log("Context menu actions, read-only applicability, and internal tree move destinations passed.");
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }

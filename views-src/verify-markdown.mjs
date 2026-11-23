@@ -141,7 +141,9 @@ const main = async () => {
   writeFileSync(join(root, "fig 02.png"), png);
   writeFileSync(join(root, ".ssh/secret.png"), png);
   writeFileSync(join(fixture, "outside.png"), png);
-  symlinkSync(join(fixture, "outside.png"), join(root, "escape.png"));
+  const escapeImage = process.platform === "win32" ? "escape/outside.png" : "escape.png";
+  if (process.platform === "win32") symlinkSync(fixture, join(root, "escape"), "junction");
+  else symlinkSync(join(fixture, "outside.png"), join(root, escapeImage));
   writeFileSync(join(root, "large.png"), "");
   truncateSync(join(root, "large.png"), 64 * 1024 * 1024);
   globalThis.pi = {
@@ -156,7 +158,7 @@ const main = async () => {
     const tree = mod.MarkdownPreview({ text: document.text, base: "dark", onLink: noop, filePath: document.path, workspacePath: root });
     const rendered = walk(tree).find(item => typeof item === "object" && item.tag === "MarkdownImage");
     check(await mod.loadMarkdownImage(rendered.props.source, rendered.props.filePath, rendered.props.workspacePath) === `data:image/png;base64,${png.toString("base64")}`, "Document-relative preview reads actual PNG bytes through the plugin");
-    for (const source of ["../missing.png", "../.ssh/secret.png", "../escape.png", "../large.png"]) {
+    for (const source of ["../missing.png", "../.ssh/secret.png", `../${escapeImage}`, "../large.png"]) {
       check(await mod.loadMarkdownImage(source, document.path, root) === null, `Real file reader preserves denial/fallback: ${source}`);
     }
   } finally {

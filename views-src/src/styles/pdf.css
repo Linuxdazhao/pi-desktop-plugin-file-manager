@@ -86,6 +86,7 @@
    container to be absolutely positioned and uses page offsets for navigation. */
 .pdf-body { position: relative; display: flex; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; }
 .pdf-reader { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; }
+.pdf-initial-loading { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .pdf-scroll { position: absolute; inset: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .pdf-document { --scale-factor: 1; padding: 16px 0; }
 .pdf-document .page {

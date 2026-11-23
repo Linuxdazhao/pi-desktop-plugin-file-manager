@@ -40,7 +40,9 @@ function widePng() {
   for (const file of ['pixel.png', '中文.png']) await fs.writeFile(path.join(images, file), png);
   await fs.writeFile(path.join(temporary, 'outside.png'), png);
   await fs.writeFile(path.join(project, '.env'), png);
-  await fs.symlink(path.join(temporary, 'outside.png'), path.join(images, 'escape.png'));
+  const escaped = process.platform === 'win32' ? 'escape/outside.png' : 'escape.png';
+  if (process.platform === 'win32') await fs.symlink(temporary, path.join(images, 'escape'), 'junction');
+  else await fs.symlink(path.join(temporary, 'outside.png'), path.join(images, escaped));
   await fs.writeFile(path.join(images, 'bad.png'), 'invalid PNG');
   await fs.writeFile(path.join(images, 'large.png'), png);
   await fs.truncate(path.join(images, 'large.png'), 8 * 1024 * 1024 + 1);
@@ -48,7 +50,7 @@ function widePng() {
     '![pixel](../images/pixel.png)', '![Chinese](../images/%E4%B8%AD%E6%96%87.png)',
     '![missing](../images/missing.png)', '![remote](https://example.invalid/image.png)',
     `![absolute](${path.join(temporary, 'outside.png')})`, '![protected](../.env)',
-    '![escape](../../outside.png)', '![symlink](../images/escape.png)',
+    '![escape](../../outside.png)', `![symlink](../images/${escaped})`,
     '![oversized](../images/large.png)', '![invalid](../images/bad.png)',
   ].join('\n\n');
   await fs.writeFile(path.join(notes, 'guide.md'), markdown);

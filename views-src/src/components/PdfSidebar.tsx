@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AnnotationMode, PDFDateString, type PDFDocumentProxy, type PDFPageProxy, type RenderTask } from "pdfjs-dist/legacy/build/pdf.mjs";
 import type { CopyKey, T } from "../i18n";
 import { formatSize } from "../lib/format";
+import { Skeleton } from "./Skeleton";
 
 export type PdfSidebarTab = "thumbnails" | "outline" | "info";
 type Outline = NonNullable<Awaited<ReturnType<PDFDocumentProxy["getOutline"]>>>;
@@ -66,7 +67,7 @@ export function PdfSidebar({ pdf, name, size, locale, page, labels, tab, t, onTa
         {tab === "outline" ? <div className="pdf-outline-content">
           {navigationFailed ? <p className="pdf-sidebar-message" role="alert">{t("pdfNavigationFailed")}</p> : null}
           {outlineFailed ? <p className="pdf-sidebar-message" role="status">{t("pdfOutlineFailed")}</p>
-            : outline === null ? <p className="pdf-sidebar-message" role="status">{t("pdfLoading")}</p>
+            : outline === null ? <Skeleton kind="list" compact label={t("pdfLoading")} />
               : outline.length ? <ul className="pdf-outline-list">{outline.map((item, index) => <OutlineItem key={index} item={item} t={t} onNavigate={navigate} />)}</ul>
                 : <p className="pdf-sidebar-message">{t("pdfNoOutline")}</p>}
         </div> : null}
@@ -193,14 +194,16 @@ function DocumentInfo({ metadata, failed, pdf, name, size, locale, t }: {
   };
   const rows: [CopyKey, string | number][] = [
     ["pdfFileName", name], ["pdfFileSize", formatSize(size)], ["pdfPageTotal", pdf.numPages],
+  ];
+  if (metadata) rows.push(
     ["pdfTitle", text("Title", "dc:title")], ["pdfAuthor", text("Author", "dc:creator")],
     ["pdfSubject", text("Subject", "dc:description")], ["pdfKeywords", text("Keywords", "pdf:keywords")],
     ["pdfCreated", date("CreationDate")], ["pdfModified", date("ModDate")],
     ["pdfCreator", text("Creator", "xmp:creatortool")], ["pdfProducer", text("Producer", "pdf:producer")],
     ["pdfVersion", text("PDFFormatVersion")],
-  ];
+  );
   return <div className="pdf-info-content">
-    {failed ? <p className="pdf-sidebar-message" role="status">{t("pdfInfoFailed")}</p> : !metadata ? <p className="pdf-sidebar-message" role="status">{t("pdfLoading")}</p> : null}
     <dl className="pdf-document-info">{rows.map(([key, value]) => <div key={key}><dt>{t(key)}</dt><dd>{value}</dd></div>)}</dl>
+    {failed ? <p className="pdf-sidebar-message" role="status">{t("pdfInfoFailed")}</p> : !metadata ? <Skeleton kind="lines" compact label={t("pdfLoading")} /> : null}
   </div>;
 }

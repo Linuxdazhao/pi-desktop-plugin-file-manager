@@ -315,8 +315,8 @@ check(
 check("根目录下的文件归到根目录去刷", decide(["a.ts"], false).refreshDirs.join() === "");
 check("多个变化只刷一次同一个目录", decide(["src/a.ts", "src/b.ts"], false).refreshDirs.join() === "src");
 check(
-  "批量改动时刷新目录数有上限（不把面板打满）",
-  decide(Array.from({ length: 30 }, (_, index) => `d${index}/f.ts`), false).refreshDirs.length === 8,
+  "批量改动不丢目录；视图按批次消化",
+  decide(Array.from({ length: 30 }, (_, index) => `d${index}/f.ts`), false).refreshDirs.length === 30,
 );
 check("没打开任何文件时只刷目录", decide(["src/a.ts"], false, null).reload === false);
 check(

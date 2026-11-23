@@ -10,6 +10,13 @@ export type Locale = "en" | "zh";
 export const COPY_TABLES = {
   en: {
     title: "File Manager",
+    expandAll: "Expand all", collapseAll: "Collapse all",
+    indexTab: "Staged", workingTab: "Changes", closeChanges: "Close changes tab",
+    openDocuments: "Open documents", closeDirtyFile: "Save changes to {name} before closing?",
+    dropAtRoot: "Drop here to move to the project root",
+    autoOn: "Auto-refresh on", autoOff: "Auto-refresh off",
+    watchFallback: "Native file events unavailable; periodically checking visible folders",
+    gitChangesPanel: "Git changes",
     projectFiles: "Project files",
     noWorkspaceTitle: "No project open",
     noWorkspaceCopy: "Choose a project from the sidebar, then come back here to edit its files.",
@@ -266,6 +273,13 @@ export const COPY_TABLES = {
   },
   zh: {
     title: "文件管理器",
+    expandAll: "全部展开", collapseAll: "全部收起",
+    indexTab: "暂存区", workingTab: "工作区", closeChanges: "关闭差异标签",
+    openDocuments: "已打开的文档", closeDirtyFile: "关闭 {name} 前要保存修改吗？",
+    dropAtRoot: "拖到这里移至项目根目录",
+    autoOn: "自动刷新：开", autoOff: "自动刷新：关",
+    watchFallback: "系统文件通知不可用，正在定期检查可见目录",
+    gitChangesPanel: "Git 改动",
     projectFiles: "项目文件",
     noWorkspaceTitle: "尚未打开项目",
     noWorkspaceCopy: "请先从侧边栏选择项目，再回到这里编辑文件。",
