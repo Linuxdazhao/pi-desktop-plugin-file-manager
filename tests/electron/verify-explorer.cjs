@@ -27,6 +27,11 @@ const electron = from(process.env.PDF_ELECTRON_DIR)('electron');
     const button = name => page.getByRole('button', { name, exact: true });
     await row('src').waitFor();
     if (process.env.FM_COMPOSER_DRAG_TEST === '1') {
+      const dependencies = path.join(project, 'node_modules');
+      const symlink = path.join(project, 'linked.txt');
+      await fs.mkdir(dependencies);
+      await fs.writeFile(path.join(dependencies, 'dependency.txt'), 'dependency');
+      await fs.symlink(path.join(project, 'src', 'deep', 'open.txt'), symlink, 'file');
       await row('src').click();
       await row('src/deep').click();
       await page.evaluate(() => {
@@ -35,11 +40,22 @@ const electron = from(process.env.PDF_ELECTRON_DIR)('electron');
       });
       await row('src/deep/open.txt').dragTo(row('src/deep'));
       await row('src').dragTo(row('src/deep'));
-      assert.deepEqual(await page.evaluate(() => window.dragEffects), ['copyMove', 'move']);
+      await row('node_modules').click();
+      await row('node_modules/dependency.txt').dragTo(row('dest'));
+      await row('linked.txt').waitFor();
+      assert.equal(await row('linked.txt').getAttribute('draggable'), 'false');
+      await row('linked.txt').dragTo(row('dest'));
+      assert.deepEqual(await page.evaluate(() => window.dragEffects), ['copyMove', 'move', 'copy']);
       assert.deepEqual(await page.evaluate(() => window.pluginBridge.testComposerDrags()), [
         { workspace: project, path: path.join(project, 'src', 'deep', 'open.txt') },
+        { workspace: project, path: path.join(dependencies, 'dependency.txt') },
       ]);
       assert.equal(await fs.readFile(path.join(project, 'src', 'deep', 'open.txt'), 'utf8'), 'original');
+      assert.equal(await fs.readFile(path.join(dependencies, 'dependency.txt'), 'utf8'), 'dependency');
+      await fs.unlink(symlink);
+      await fs.unlink(path.join(dependencies, 'dependency.txt'));
+      await fs.rmdir(dependencies);
+      await button('Refresh').click();
       await row('src').click();
     }
     const gitTab = page.getByRole('tab', { name: 'Git changes', exact: true });

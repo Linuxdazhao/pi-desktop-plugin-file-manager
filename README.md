@@ -113,6 +113,8 @@ calls `pluginBridge.startComposerFileDrag({ workspace, path })` during
 folder. The Host owns drop admission and the draft. When the method is absent
 or declines the drag, the tree still supports its ordinary internal move.
 Remote files, directories and symbolic links do not start Composer drags.
+The view can still reference a visible file while tree moves are unavailable,
+for example under `node_modules` or while saving an editor tab.
 See [PI-Desktop #2579](https://github.com/vastsa/PI-Desktop/issues/2579).
 
 ## 安装
