@@ -26,6 +26,22 @@ const electron = from(process.env.PDF_ELECTRON_DIR)('electron');
     const row = p => page.locator(`[role="treeitem"][data-path="${p}"]`);
     const button = name => page.getByRole('button', { name, exact: true });
     await row('src').waitFor();
+    if (process.env.FM_COMPOSER_DRAG_TEST === '1') {
+      await row('src').click();
+      await row('src/deep').click();
+      await page.evaluate(() => {
+        window.dragEffects = [];
+        window.addEventListener('dragstart', event => window.dragEffects.push(event.dataTransfer.effectAllowed));
+      });
+      await row('src/deep/open.txt').dragTo(row('src/deep'));
+      await row('src').dragTo(row('src/deep'));
+      assert.deepEqual(await page.evaluate(() => window.dragEffects), ['copyMove', 'move']);
+      assert.deepEqual(await page.evaluate(() => window.pluginBridge.testComposerDrags()), [
+        { workspace: project, path: path.join(project, 'src', 'deep', 'open.txt') },
+      ]);
+      assert.equal(await fs.readFile(path.join(project, 'src', 'deep', 'open.txt'), 'utf8'), 'original');
+      await row('src').click();
+    }
     const gitTab = page.getByRole('tab', { name: 'Git changes', exact: true });
     await gitTab.click();
     await button('Initialize repository').click();

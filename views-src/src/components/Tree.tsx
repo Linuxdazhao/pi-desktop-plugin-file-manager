@@ -26,6 +26,7 @@ type Props = {
   onOpen: (entry: FileEntry) => void;
   onRefreshDir: (path: string) => void;
   onMove?: (entry: FileEntry, targetDirectory: string) => void;
+  onComposerFileDrag?: (entry: FileEntry) => boolean;
   onContextMenu: (event: React.MouseEvent, entry: FileEntry | null) => void;
 };
 
@@ -82,6 +83,7 @@ export function Tree({
   onOpen,
   onRefreshDir,
   onMove,
+  onComposerFileDrag,
   onContextMenu,
 }: Props) {
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -262,7 +264,8 @@ export function Tree({
             onDragStart={(event) => {
               if (!onMove || !movableEntry(entry)) { event.preventDefault(); return; }
               const token = crypto.randomUUID();
-              event.dataTransfer.effectAllowed = "move";
+              const composerReference = !entry.isDirectory && (onComposerFileDrag?.(entry) ?? false);
+              event.dataTransfer.effectAllowed = composerReference ? "copyMove" : "move";
               event.dataTransfer.setData(DRAG_TYPE, token);
               setHighlight(null);
               setDrag({ entry, rows, token });
