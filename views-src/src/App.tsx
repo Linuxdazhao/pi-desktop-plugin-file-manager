@@ -1,34 +1,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "./lib/bridge";
-import { watchAppearance, type Base, type Locale as HostLocale } from "./lib/appearance";
+import { applyBase, watchAppearance, type Base, type Locale as HostLocale } from "./lib/appearance";
 import { watchWorkspace, workspaceKey, type Workspace } from "./lib/workspace";
-import { channels, failureMessage, isConflict, type DeleteResponse, type EditorOption, type EditorsResponse, type Failure, type FileEntry, type GitDiffResponse, type GitSummary, type HelloResponse, type ListResponse, type Prefs, type PrefsResponse, type ReadRequest, type ReadResponse, type SearchHit, type SearchResponse, type WatchResponse, type WriteRequest, type WriteResponse } from "./lib/rpc";
-import { gitSummaryText, lookupGit } from "./lib/git";
+import { channels, failureMessage, isConflict, type DeleteResponse, type EditorOption, type EditorsResponse, type Failure, type FileEntry, type GitSummary, type HelloResponse, type ListResponse, type Prefs, type PrefsResponse, type ReadRequest, type ReadResponse, type RepoContext, type SearchHit, type SearchResponse, type WriteRequest, type WriteResponse } from "./lib/rpc";
+import { gitColor, gitGlyph, gitSummaryText, gitTitle } from "./lib/git";
 import { useTreeWatch } from "./lib/useTreeWatch";
-import { baseNameOf, parentOf } from "./lib/format";
-import { absoluteFullPath, findRootForPath, hostActionPath, normalizeRoots, primaryRootOf, projectKeyOf, rememberProjectRoot, resolveSelectedRoot, samePath, type WorkspaceRoot } from "./lib/roots";
+import { baseNameOf, formatSize, parentOf } from "./lib/format";
+import { absoluteFullPath, absolutePathOf, findRootForPath, hostActionPath, normalizeRoots, primaryRootOf, projectKeyOf, rememberProjectRoot, resolveSelectedRoot, samePath, type WorkspaceRoot } from "./lib/roots";
 
 import { makeT, type T } from "./i18n";
-import { resolveViewer, type ViewerMode } from "./lib/viewers";
+import { MODE_LABEL, resolveViewer, type ViewerMode } from "./lib/viewers";
 import { toOpenFile, withSavedContent, type OpenFile } from "./lib/openFile";
 import { openInBuiltInBrowser, openWithDefaultApp, openWithEditor, revealInFileManager } from "./lib/hostActions";
 import { editorsFor } from "./lib/editors";
 import { buildFileContextMenuEntries, withBuiltInBrowserEntry } from "./lib/file-context-menu";
 import { copyText } from "./lib/clipboard";
 import { isExternalPath, watchHostOpenRequests, type HostOpenRequest } from "./lib/hostOpen";
-import type { DiffViewState } from "./components/GitDiffView";
 import { Tree, type DirState } from "./components/Tree";
 import { Skeleton } from './components/Skeleton';
 import { FileIcon } from "./lib/fileIcons";
 import { IconButton } from "./components/IconButton";
-import { GitPanel } from "./components/GitPanel";
-import { GitCommitDetail, type HistoryCommit } from "./components/GitHistory";
-import { GitPreview, type PreviewTab } from "./components/GitPreview";
+import { GitPanel, gitOperationError, type GitSegment } from "./components/GitPanel";
+import { ActivityRail, ContentBar, Segmented, StatusBar, createCaretStore, nextTab, segmentId, type SidebarView } from "./components/Workbench";
+import { GitSync } from "./components/GitSync";
+import { GitIcon, GitIconPath } from "./components/GitIcons";
+import { GitCommitDetail } from "./components/GitHistory";
+import { GitPreview } from "./components/GitPreview";
 import { EditorPane } from "./components/EditorPane";
 import { ConfirmDialog, PromptDialog } from "./components/Dialogs";
 import { ContextMenu, type MenuEntry } from "./components/ContextMenu";
 import type { EditorHandle } from "./lib/editor";
 import { useDocumentTabs } from "./lib/documentTabs";
+import { contentKind, tabs as paneTabs } from "./lib/pane";
+import { scopeFor, useGitWorkspace, type GitScope } from "./lib/gitWorkspace";
+import { reviewKey, useReviewTabs, type ReviewTab } from "./lib/reviewTabs";
+import { useSidebarSize } from "./lib/sidebarSize";
 
 type SearchState = { hits: SearchHit[]; running: boolean; done: boolean };
 
@@ -89,13 +95,17 @@ export default function App() {
   });
   /** 整个工作区的 git 概览（分支 + 各状态计数），跟着最近一次列表刷新。 */
   const [gitSummary, setGitSummary] = useState<GitSummary | null>(null);
-  const [gitOpen, setGitOpen] = useState(false);
-  const [inspectedCommit, setInspectedCommit] = useState<HistoryCommit | null>(null);
-  const [previewTab, setPreviewTab] = useState<PreviewTab | null>(null);
-  const [showPreview, setShowPreview] = useState(false);
-  const [gitRefresh, setGitRefresh] = useState(0);
-  /** 差异视图：path + 加载态。null = 右侧仍是编辑器。 */
-  const [diff, setDiff] = useState<(DiffViewState & { path: string }) | null>(null);
+  /**
+   * Which view the single sidebar shows. `search` is its own view now: the
+   * explorer's inline filter only filters what is already loaded, while the
+   * search view walks the whole project.
+   */
+  const [view, setView] = useState<SidebarView>("files");
+  const [gitSegment, setGitSegment] = useState<GitSegment>("changes");
+  const [caret] = useState(createCaretStore);
+  const [review, dispatchReview] = useReviewTabs();
+  const activeReview = review.tabs.find(tab => reviewKey(tab) === review.active);
+  const sidebarOpen = !prefs.treeCollapsed;
   /** 这个运行时能不能监听（0.8.0）；不能就把「自动刷新」开关显示成不可用。 */
   const [watchAvailable, setWatchAvailable] = useState(true);
   const [openHtmlInBrowserAvailable, setOpenHtmlInBrowserAvailable] = useState(false);
@@ -110,7 +120,10 @@ export default function App() {
   const [prompt, setPrompt] = useState<Prompt>(null);
   const [conflict, setConflict] = useState<Conflict>(null);
   const [menu, setMenu] = useState<Menu>(null);
+  /** 整个项目的搜索词（「搜索」视图）。 */
   const [query, setQuery] = useState("");
+  /** 树里那条即时筛选：只过滤已经加载的目录，不发请求。 */
+  const [filter, setFilter] = useState("");
   /** 删除前的确认框（删除不可撤销，必须明确确认）。 */
   const [confirmDelete, setConfirmDelete] = useState<{ entry: FileEntry } | null>(null);
   const [search, setSearch] = useState<SearchState>({ hits: [], running: false, done: true });
@@ -130,24 +143,19 @@ export default function App() {
   const openTokenRef = useRef(0);
   const watchReadToken = useRef(0);
   const searchTokenRef = useRef(0);
-  /** 差异请求的守卫：连点「刷新」时只有最后一次的结果算数。 */
-  const diffTokenRef = useRef(0);
-  /** 当前差异视图对应哪个文件；保存 / 重新加载后据此决定要不要重取。 */
-  const diffPathRef = useRef<string | null>(null);
-  /** loadDiff 经 ref 转发：openEntry 定义在它之前，却要在读完之后回调它。 */
-  const loadDiffRef = useRef<(path: string) => void>(() => {});
   // 每次「从磁盘装载」递增，写进 OpenFile.loadToken：编辑器据此区分
   // 「换文件 / 重新加载」与「保存后更新 mtime」。见 lib/openFile.ts。
   const loadTokenRef = useRef(0);
-  const saveRef = useRef<(override?: { mtimeMs: number; size: number }) => Promise<boolean>>(
-    async () => false,
-  );
+  const saveRef = useRef<(() => Promise<boolean>) | null>(null);
   /** 正在进行的保存（含目标路径）。同一个文件的重复请求复用它，不发出第二次写。 */
   const inFlightRef = useRef<{ path: string; promise: Promise<boolean> } | null>(null);
   /** 保存是异步的：回来时用户可能已经切走，元数据与脏标记不能落到新文件上。 */
   const openPathRef = useRef<string | null>(null);
   const pendingRef = useRef<(() => void) | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const searchInput = useRef<HTMLInputElement>(null);
+  const refreshChangesRef = useRef<() => void>(() => {});
   const loadRef = useRef<(path: string, force?: boolean) => Promise<FileEntry[] | undefined>>(async () => undefined);
   /** 宿主请求（入口查询串 / view:open 推送）统一走它。 */
   const hostOpenRef = useRef<(request: HostOpenRequest) => void>(() => {});
@@ -177,18 +185,14 @@ export default function App() {
 
   // 让回调读到最新值而不必重订阅。
   const dirtyRef = useRef(dirty);
-  const currentNameRef = useRef("");
   const tRef = useRef(t);
 
   dirsRef.current = directories;
   dirtyRef.current = dirty;
   openPathRef.current = openFile ? openFile.path : null;
-  currentNameRef.current = openFile ? baseNameOf(openFile.path) : t("projectFiles");
   tRef.current = t;
   prefsRef.current = prefs;
   rootRef.current = root;
-  // 跨 await 的回调（保存成功后）要读到差异视图当前对应哪个文件。
-  diffPathRef.current = diff ? diff.path : null;
 
   // 组里全部 folder root（宿主没给 roots 时只有一个，就是主根）。
   const roots = useMemo(() => (root ? normalizeRoots(root) : []), [root]);
@@ -231,15 +235,15 @@ export default function App() {
     pendingRef.current = null;
     setGuard(null);
     setError(null);
+    searchTokenRef.current++;
     setQuery("");
+    setFilter("");
     setSearch({ hits: [], running: false, done: true });
-    // 概览与徽标都是「上一个 root 的」，换项目 / 换文件夹必须一起清掉。
     setGitSummary(null);
-    setGitOpen(false);
-    setInspectedCommit(null);
-    setPreviewTab(null);
-    setShowPreview(false);
-    setDiff(null);
+    setIgnoreActive(false);
+    setView("files");
+    setGitSegment("changes");
+    dispatchReview({ type: "clear" });
     expandToken.current++;
     directoryRequests.current.clear();
     setExpanding(false);
@@ -477,50 +481,35 @@ export default function App() {
 
   // ── 打开 / 保存 ──────────────────────────────────────────────────────────
 
-  // ── git 差异（0.7.0） ────────────────────────────────────────────────────
-
-  /**
-   * 取一个文件的变更内容。差异是「现算」的：主进程那边有 2s 的快照缓存，所以
-   * 连点两次刷新不会把 git 跑两遍；这里只负责把加载态与失败文案接上。
-   *
-   * 失败不弹全局错误横幅——它只影响右侧这一块，树与编辑器都还能用。
-   */
-  const loadDiff = useCallback(
-    async (path: string) => {
-      const token = ++diffTokenRef.current;
-      setDiff(prev => prev?.path === path && prev.status === 'ready' ? prev : { path, status: 'loading' });
-      try {
-        const response = await invoke<GitDiffResponse>(channels.gitDiff, { path });
-        if (token !== diffTokenRef.current) return;
-        if (!response.ok) {
-          setDiff({ path, status: "error", message: failureMessage(response, t) });
-          return;
-        }
-        setDiff({ path, status: "ready", response });
-      } catch (cause) {
-        if (token !== diffTokenRef.current) return;
-        setDiff({ path, status: "error", message: String((cause as Error).message) });
-      }
-    },
-    [t],
-  );
-
-  loadDiffRef.current = loadDiff;
-
-  /** 打开某个文件的变更视图（工具栏的「变更」按钮 / 右键的「查看变更」）。 */
-  const openDiff = useCallback(
-    (path: string) => {
-      // 项目外文件（宿主请求打开的会话临时文件 / 附件）不在任何仓库里，没有变更。
-      if (!path || isExternalPath(path)) return;
-      void loadDiff(path);
-    },
-    [loadDiff],
-  );
-
-  const closeDiff = useCallback(() => {
-    diffTokenRef.current += 1;
-    setDiff(null);
-  }, []);
+  // Review tabs are independent of the editor buffer. Activating one cancels
+  // a pending foreground open, but leaves the current file and draft intact.
+  const cancelOpening = () => {
+    if (!openingPath) return;
+    ++openTokenRef.current;
+    setOpeningPath(null);
+  };
+  const activateReview = (key: string) => {
+    cancelOpening();
+    dispatchReview({ type: "activate", key });
+  };
+  const openReview = (tab: ReviewTab) => {
+    cancelOpening();
+    dispatchReview({ type: "open", tab });
+  };
+  const openDiff = (path: string) => {
+    if (!path || isExternalPath(path)) return;
+    const existing = review.tabs.find(tab => tab.kind === "diff" && tab.path === path);
+    if (existing) activateReview(reviewKey(existing));
+    else openReview({ kind: "diff", panel: false, path, scope: "worktree" });
+  };
+  const focusActiveTab = () => requestAnimationFrame(() => {
+    const next = stripRef.current?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
+    (next ?? document.getElementById(segmentId("fm-sidebar", view)))?.focus({ preventScroll: true });
+  });
+  const closeReview = (key: string) => {
+    dispatchReview({ type: "close", key });
+    focusActiveTab();
+  };
 
   /**
    * 打开一个路径。只要 path：宿主请求打开的可能是项目之外的绝对路径（会话
@@ -533,7 +522,7 @@ export default function App() {
 
   const openEntry = useCallback(
     async (entry: { path: string }, fromWatch = false, reload = false) => {
-      if (!fromWatch) { setShowPreview(false); setInspectedCommit(null); }
+      if (!fromWatch) dispatchReview({ type: "document" });
       const token = fromWatch ? openTokenRef.current : ++openTokenRef.current;
       const readToken = ++watchReadToken.current;
       const current = () => token === openTokenRef.current && (!fromWatch || (readToken === watchReadToken.current && documents.active?.file.path === entry.path));
@@ -543,7 +532,7 @@ export default function App() {
       const cached = documents.get(entry.path);
       if (!fromWatch) setOpeningPath(!cached ? entry.path : null);
       if (!fromWatch && !reload && cached) {
-        if (documents.active !== cached) { captureTab(); documents.activate(entry.path); closeDiff(); }
+        if (documents.active !== cached) { captureTab(); documents.activate(entry.path); }
         const disk = dirsRef.current.get(parentOf(entry.path))?.entries?.find(e => e.path === entry.path);
         if (disk && disk.mtimeMs > cached.file.mtimeMs + 0.5) documents.patch(entry.path, { changed: true });
         if (!cached.changed || cached.dirty) return;
@@ -565,13 +554,6 @@ export default function App() {
         documents.load(file);
         const mode = resolveViewer(file.path, prefsRef.current)?.mode;
         if (mode && !documents.active?.mode) documents.patch(file.path, { mode });
-        // 换文件就收起上一个文件的差异视图（它占着整个右侧）；重新加载同一个文件
-        // 则要按新内容重取——它此刻多半正开着。
-        if (diffPathRef.current === entry.path) {
-          loadDiffRef.current(entry.path);
-        } else {
-          setDiff(null);
-        }
       } catch (cause) {
         if (!current()) return;
         setError(String((cause as Error).message));
@@ -579,14 +561,17 @@ export default function App() {
         if (!fromWatch && current()) setOpeningPath(null);
       }
     },
-    [captureTab, closeDiff, documents, t],
+    [captureTab, documents, t],
   );
 
 
   useTreeWatch(!remoteReadOnly && prefs.watchFiles ? activeRoot?.path ?? null : null, {
-    visible: () => prefs.treeCollapsed ? [] : ["", ...[...expanded].filter(dir => ancestorPaths(dir).every(parent => expanded.has(parent)))],
+    visible: () => ["", ...(sidebarOpen && view === "files" ? [...expanded].filter(dir => ancestorPaths(dir).every(parent => expanded.has(parent))) : [])],
     refresh: dir => loadDirectory(dir, true),
-    onPaths: (paths, stale) => documents.noteChanges(paths, stale),
+    onPaths: (paths, stale) => {
+      documents.noteChanges(paths, stale);
+      refreshChangesRef.current();
+    },
     document: () => ({ openPath: openPathRef.current, dirty: dirtyRef.current }),
     onDocument: (path, warn) => {
       if (isExternalPath(path)) return;
@@ -624,12 +609,16 @@ export default function App() {
       setOpeningPath(null);
       documents.remove(path);
       if (wasActive) {
-        closeDiff(); setError(null);
+        setError(null);
         const next = documents.active?.file.path;
         setSelected(next && !isExternalPath(next) ? next : null);
-        if (next && documents.active?.changed && !documents.active.dirty) void openEntry({ path: next });
+        if (next && documents.active?.changed && !documents.active.dirty) void openEntry({ path: next }, true);
+        if (!next && !activeReview) {
+          const fallback = review.tabs[review.tabs.length - 1];
+          if (fallback) dispatchReview({ type: "activate", key: reviewKey(fallback) });
+        }
       }
-      requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('.fm-document-tabs [aria-selected="true"]')?.focus({ preventScroll: true }));
+      focusActiveTab();
     };
     if (!tab.dirty) { close(); return; }
     pendingRef.current = close;
@@ -722,9 +711,8 @@ export default function App() {
   const applyHostOpen = useCallback(
     (request: HostOpenRequest) => {
       const requestedWorkspace = workspaceKey(workspaceRef.current);
-      setGitOpen(false);
-      setInspectedCommit(null);
-      setShowPreview(false);
+      setView("files");
+      dispatchReview({ type: "document" });
       const rawPath = request.path;
       const absolute = isExternalPath(rawPath);
       // 组的 root 列表还没到手时（ready 之前）这个请求会被排队，见下面 ready 的 effect。
@@ -816,8 +804,7 @@ export default function App() {
             documents.patch(target.path, { file: withSavedContent(target, response, text), dirty: tabText() !== text, changed: false });
             // 项目外的文件没有对应的树目录要刷新。
             if (!external) void loadDirectory(parentOf(target.path), true);
-            // 差异视图正开着这个文件时跟着重取：刚存下的内容就是最新的变更。
-            if (diffPathRef.current === target.path) loadDiffRef.current(target.path);
+            if (!external) refreshChangesRef.current();
             return !tab.dirty;
           }
           if (isConflict(response)) {
@@ -844,7 +831,7 @@ export default function App() {
     [loadDirectory, documents, t],
   );
 
-  saveRef.current = save;
+  saveRef.current = activeReview || openingPath ? null : save;
 
   // Ctrl/Cmd+S 在编辑器之外也得能用：点了工具栏按钮、或正停在预览 / 表格 / 树
   // 视图时，焦点不在 CodeMirror 里，编辑器自己的键位收不到这个键。编辑器内部的
@@ -855,7 +842,7 @@ export default function App() {
       if (!event.ctrlKey && !event.metaKey) return;
       if (event.defaultPrevented) return;
       event.preventDefault();
-      void saveRef.current();
+      void saveRef.current?.();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -919,33 +906,14 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [query, runSearch]);
 
-  // ── 分割条 ───────────────────────────────────────────────────────────────
-
-  const startResize = (event: React.MouseEvent) => {
-    event.preventDefault();
-    const container = bodyRef.current;
-    if (!container) return;
-    let latest = prefs.splitRatio;
-
-    const onMove = (move: MouseEvent) => {
-      const rect = container.getBoundingClientRect();
-      if (rect.width <= 0) return;
-      latest = Math.min(Math.max((move.clientX - rect.left) / rect.width, 0.15), 0.7);
-      setPrefs((prev) => ({ ...prev, splitRatio: latest }));
-    };
-    const onUp = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      persistPrefs({ splitRatio: latest });
-    };
-
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  };
+  const sidebar = useSidebarSize(bodyRef, prefs.sidebarWidth, prefs.splitRatio, width => persistPrefs({ sidebarWidth: width }));
+  const repoContext = useMemo<RepoContext | null>(() => root && activeRoot && !remoteReadOnly ? {
+    workspacePath: root.path, rootPath: activeRoot.path, projectId: root.projectId,
+  } : null, [root, activeRoot?.path, remoteReadOnly]);
+  const git = useGitWorkspace(repoContext, (sidebarOpen && view === "git") || (activeReview?.kind === "diff" && activeReview.panel), () => refreshTree());
+  refreshChangesRef.current = git.refreshChanges;
+  const refreshGit = git.refresh;
+  const syncInfo = git.info;
 
   // ── 新建 / 重命名 / 移动 ─────────────────────────────────────────────────
 
@@ -964,6 +932,7 @@ export default function App() {
           setError(failureMessage(response, t));
           return;
         }
+        refreshChangesRef.current();
         await loadDirectory(active.parent, true);
         if (active.parent) setExpanded((prev) => new Set(prev).add(active.parent));
       } else if (active.kind === "rename") {
@@ -976,6 +945,7 @@ export default function App() {
           return;
         }
         documents.move(active.entry.path, response.entry.path);
+        refreshChangesRef.current();
         await loadDirectory(parentOf(active.entry.path), true);
         setSelected((prev) => (prev === active.entry.path ? null : prev));
       }
@@ -1002,7 +972,7 @@ export default function App() {
         // 删的正是当前打开的文件：编辑器里那份内容已经没有对应的磁盘文件了。
         const within = (p: string) => p === entry.path || p.startsWith(entry.path + '/');
         for (const tab of documents.tabs) if (within(tab.file.path)) documents.remove(tab.file.path);
-        if (diffPathRef.current && within(diffPathRef.current)) closeDiff();
+        if (!external) refreshChangesRef.current();
       } catch (cause) {
         setError(String((cause as Error).message));
       }
@@ -1023,7 +993,7 @@ export default function App() {
       const dest = result.entry.path;
       const within = (path: string) => path === entry.path || path.startsWith(entry.path + "/");
       documents.move(entry.path, dest);
-      if (diffPathRef.current && within(diffPathRef.current)) closeDiff();
+      refreshChangesRef.current();
       setSelected(dest);
       expandToken.current++;
       setExpanding(false);
@@ -1146,7 +1116,7 @@ export default function App() {
    * 否则「保存之后右侧的『变更』按钮凭空消失」。
    */
   const listedOpenFile = openFile && directories.get(parentOf(openFile.path))?.entries?.find(e => e.path === openFile.path);
-  const openFileGit = listedOpenFile ? listedOpenFile.git ?? null : openFile ? (openFile.git ?? lookupGit(directories, openFile.path)) : null;
+  const openFileGit = listedOpenFile ? listedOpenFile.git : openFile?.git ?? null;
 
   const changeViewerMode = (mode: ViewerMode) => {
     if (!viewer) return;
@@ -1186,333 +1156,516 @@ export default function App() {
       onCopyAbsolutePath: (entry) =>
         void copyPath(absoluteFullPath(entry.path, root?.remote && activeRootRef.current
           ? { ...activeRootRef.current, path: root.remote.path } : activeRootRef.current)),
-      onViewChanges: (entry) => {
-        setMenu(null);
-        void openEntry(entry).then(() => { if (documents.active?.file.path === entry.path) openDiff(entry.path); });
-      },
+      onViewChanges: (entry) => { setMenu(null); openDiff(entry.path); },
       onRevealInFolder: (entry) =>
         runHostAction("reveal", hostActionPath(entry.path, activeRootRef.current)),
       onRefresh: (directory) => void loadDirectory(directory, true),
     });
   };
 
-  // ── 渲染 ─────────────────────────────────────────────────────────────────
+  // ── 视图切换 ─────────────────────────────────────────────────────────────
 
+  const showView = useCallback((next: SidebarView, toggle = false) => {
+    const collapsed = prefsRef.current.treeCollapsed;
+    if (toggle && !collapsed && view === next) {
+      persistPrefs({ treeCollapsed: true });
+      return;
+    }
+    if (collapsed) persistPrefs({ treeCollapsed: false });
+    if (next === "git" && (collapsed || view !== "git")) refreshGit();
+    setView(next);
+  }, [persistPrefs, refreshGit, view]);
+
+  const onWorkbenchKey = (event: React.KeyboardEvent) => {
+    if (event.defaultPrevented || event.altKey || event.repeat || event.nativeEvent.isComposing || guard || prompt || conflict || confirmDelete) return;
+    if (!(event.ctrlKey || event.metaKey)) return;
+    const key = event.key.toLowerCase();
+    if (event.shiftKey && (key === "e" || key === "f" || key === "g")) {
+      event.preventDefault();
+      const next = key === "e" ? "files" : key === "f" ? "search" : "git";
+      showView(next);
+      requestAnimationFrame(() => {
+        if (next === "search") searchInput.current?.focus();
+        else document.getElementById(segmentId("fm-sidebar", next))?.focus();
+      });
+    } else if (!event.shiftKey && key === "b") {
+      event.preventDefault();
+      persistPrefs({ treeCollapsed: sidebarOpen });
+      if (sidebarOpen && (event.target instanceof Element) && event.target.closest("#fm-sidebar, .fm-gutter")) {
+        document.getElementById(segmentId("fm-sidebar", view))?.focus();
+      }
+    } else if (!event.shiftKey && key === "w" && (activeReview || openFile)) {
+      event.preventDefault();
+      if (activeReview) closeReview(reviewKey(activeReview));
+      else if (openFile) closeTab(openFile.path);
+    }
+  };
+
+  // ── 渲染 ─────────────────────────────────────────────────────────────────
   const searchActive = query.trim().length > 0;
-  const stripRef = useRef<HTMLDivElement>(null);
+  const documentTabs = documents.tabs;
+  const fileTabId = (path: string) => segmentId("fm-content-panel", `file-${encodeURIComponent(path)}`);
+  const reviewTabId = (key: string) => segmentId("fm-content-panel", encodeURIComponent(key));
+  const activeTabId = activeReview ? reviewTabId(reviewKey(activeReview)) : openFile ? fileTabId(openFile.path) : undefined;
   useEffect(() => {
-    const selectedTab = stripRef.current?.querySelector('[role="tab"][aria-selected="true"]');
-    selectedTab?.parentElement?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [openFile?.path, showPreview, previewTab?.path]);
+    stripRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeTabId]);
+  const nameCounts = new Map<string, number>();
+  for (const { file } of documentTabs) {
+    const name = baseNameOf(file.path);
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
+  const activeDiff = activeReview?.kind === "diff" ? activeReview : null;
+  const activeCommit = activeReview?.kind === "commit" ? activeReview.commit : null;
+  const diffEntry = activeDiff?.panel ? git.snapshot?.entries.find(entry => entry.path === activeDiff.path) : undefined;
+  const diffScope = activeDiff ? scopeFor(diffEntry, activeDiff.scope) : "worktree";
+  const diffFailure = git.changesError ?? (!git.changesSupported && git.infoReady ? git.infoError : null);
+  const diffUnavailable = activeDiff?.panel && (diffFailure || (git.infoReady && !git.changesSupported))
+    ? (diffFailure ? gitOperationError(diffFailure, t) : t("gitUnavailable")) : undefined;
+  const documentVisible = !activeReview && !openingPath;
+  const sourceVisible = documentVisible && openFile?.kind === "text" && (!viewer || viewer.mode === "source");
+  const wrapLines = prefs.wrapLines !== false;
+  const relatedDiff = activeDiff?.path === openFile?.path && !!activeDiff;
+  const options = openFile && (documentVisible || relatedDiff) && openFile.kind === "text" ?
+    paneTabs({ modes: viewer?.modes ?? null, hasGit: !!openFileGit || relatedDiff, isText: true }) : [];
+  const viewMode = relatedDiff ? "diff" : viewer?.mode ?? "source";
+  const fileRoot = root?.remote && activeRoot ? { ...activeRoot, path: root.remote.path } : activeRoot;
+  const displayFilePath = openFile ? (isExternalPath(openFile.path) ? openFile.path : absolutePathOf(openFile.path, fileRoot)) : "";
+  const documentKind = contentKind({ fileKind: openFile?.kind ?? null, viewerMode: viewer?.mode ?? "source", diffOpen: false });
+  const kind = activeCommit ? t("commitDetail") : activeDiff ? t("changes") : openingPath ? t("loading") : openFile ? t({
+    editor: "statusSource", markdown: "previewMode", table: "tableMode", tree: "treeMode", image: "statusImage", media: "statusMedia",
+    pdf: "pdfTitle", sqlite: "sqliteTitle", binary: "statusBinary", tooLarge: "statusBinary", diff: "changes",
+  }[documentKind] as Parameters<T>[0]) : null;
+  const syncOutcome = git.outcome?.operation === "sync" ? git.outcome : null;
+  const hiddenGitError = (view !== "git" || !sidebarOpen) ? git.outcome?.error : null;
+  const globalError = error ?? ((syncOutcome?.error ?? hiddenGitError) ? gitOperationError((syncOutcome?.error ?? hiddenGitError)!, t) : null);
+
+  /**
+   * 新建文件 / 文件夹落在哪：有选中目录就是它，选中的是文件就落在它所在的目录，
+   * 什么都没选就落在根。与右键菜单里的做法一致，只是头部按钮需要一个默认值。
+   */
+  const selectedDirectory = useMemo(() => {
+    if (!selected) return "";
+    const entry = directories.get(parentOf(selected))?.entries?.find(e => e.path === selected);
+    if (entry?.isDirectory) return selected;
+    return parentOf(selected);
+  }, [directories, selected]);
+
+  /**
+   * 点搜索结果：逐级展开并加载祖先目录，然后打开它。与树里点同一个文件后
+   * 的视觉结果一致（展开、高亮、内容区装载），只是入口不同。
+   */
+  const openHit = (hit: SearchHit) => {
+    const revision = revisionRef.current;
+    setView("files");
+    setFilter("");
+    const parents = ancestorPaths(hit.path);
+    setExpanded(prev => new Set([...prev, ...parents, ...(hit.isDirectory ? [hit.path] : [])]));
+    setSelected(hit.path);
+    if (!hit.isDirectory) void openEntry({ path: hit.path });
+    void (async () => {
+      for (const parent of [...parents, ...(hit.isDirectory ? [hit.path] : [])]) {
+        if (revision !== revisionRef.current) return;
+        await loadDirectory(parent);
+      }
+    })();
+  };
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col" style={{ background: "var(--bg)", color: "var(--fg)" }}>
-      <header
-        className="flex min-h-[38px] flex-none flex-wrap items-center gap-2 border-b px-2.5 py-1.5"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-      >
-        {/* 显示 / 隐藏文件列表：收起状态下这是重新展开的唯一入口，所以常驻 header 最左侧。 */}
-        <IconButton
-          label={prefs.treeCollapsed ? t("showTree") : t("hideTree")}
-          active={!prefs.treeCollapsed}
-          onClick={() => persistPrefs({ treeCollapsed: !prefs.treeCollapsed })}
-        >
-          <rect x="3" y="3" width="18" height="18" rx="2" />
-          <path d="M9 3v18" />
-          {prefs.treeCollapsed ? <path d="m13 9 3 3-3 3" /> : <path d="m16 9-3 3 3 3" />}
-        </IconButton>
-        <span className="flex min-w-0 items-center gap-1.5">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--icon-folder)" }} aria-hidden="true">
-            <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+    <div className="fm-app" onKeyDown={onWorkbenchKey}>
+      <header className="fm-topbar">
+        <span className="fm-brand">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 6h6l2 2h10v12H3z" />
           </svg>
-          {switchable ? (
-            /* 组的文件夹多于一个：这个名字本身就是切换器。菜单复用 ContextMenu
-               （Escape 与点到外面都会关、↑↓ / Home / End 可用），按钮自己提供
-               aria-haspopup / aria-expanded 与可读名字。长名字靠 min-w-0 + truncate
-               截断，右侧那几个工具按钮因此不会被挤走。
-               只有一个 root（或老宿主不给组信息）时下面这条静态标签原样保留。 */
-            <button
-              ref={rootButtonRef}
-              type="button"
-              aria-haspopup="menu"
-              aria-expanded={rootMenu !== null}
-              aria-label={t("switchFolderNamed", { name: headerName, count: rootCount })}
-              title={t("switchFolder")}
-              onMouseDown={() => {
-                // ContextMenu 把「按下」当点到外面，会先把菜单关掉；这里记下按之前
-                // 的状态，好在随后那一下 click 里分清「开」与「再点一次要关」。
-                armedRef.current = rootMenu !== null;
-              }}
-              onClick={openRootMenu}
-              className="-mx-1 flex min-w-0 max-w-[18rem] items-center gap-1 rounded-lg border-0 bg-transparent px-1 py-0.5 text-[12.5px] font-medium transition-colors hover:bg-[var(--surface-hover)]"
-            >
-              <span className="min-w-0 truncate">{headerName}</span>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="flex-none" style={{ color: "var(--faint)" }} aria-hidden="true">
-                <path d="m6 9 6 6 6-6" />
-              </svg>
-            </button>
-          ) : (
-            <span className="min-w-0 truncate text-[12.5px] font-medium">
-              {root?.name ?? t("title")}
-            </span>
-          )}
+          {t("title")}
         </span>
 
-        {remoteReadOnly ? <span role="status" className="text-[10px]" style={{ color: "var(--muted)" }}>{t("remoteReadOnly")}</span> : null}
+        {switchable ? (
+          /* 组的文件夹多于一个：这个名字本身就是切换器。菜单复用 ContextMenu
+             （Escape 与点到外面都会关、↑↓ / Home / End 可用），按钮自己提供
+             aria-haspopup / aria-expanded 与可读名字。 */
+          <button
+            ref={rootButtonRef}
+            type="button"
+            className="fm-rootchip"
+            aria-haspopup="menu"
+            aria-expanded={rootMenu !== null}
+            aria-label={t("switchFolderNamed", { name: headerName, count: rootCount })}
+            title={t("switchFolder")}
+            onMouseDown={() => { armedRef.current = rootMenu !== null; }}
+            onClick={openRootMenu}
+          >
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 6h6l2 2h10v12H3z" />
+            </svg>
+            <span className="fm-rootchip-name">{headerName}</span>
+            <span className="fm-rootchip-hint">{root?.name && root.name !== headerName ? root.name : ""}</span>
+            <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+              <path d="m4 6 4 4 4-4" />
+            </svg>
+          </button>
+        ) : (
+          <span className="fm-rootchip" data-static="true">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 6h6l2 2h10v12H3z" />
+            </svg>
+            <span className="fm-rootchip-name">{root?.name ?? t("title")}</span>
+          </span>
+        )}
 
-        <span className="ml-auto flex max-w-full flex-wrap items-center gap-1">
-          <IconButton label={t("refresh")} onClick={() => { refreshTree(); if (gitOpen) setGitRefresh(n => n + 1); }}>
-            <path d="M20 11a8 8 0 0 0-14.9-3.9L3 9" />
-            <path d="M3 4v5h5" />
-            <path d="M4 13a8 8 0 0 0 14.9 3.9L21 15" />
-            <path d="M21 20v-5h-5" />
-          </IconButton>
-          <IconButton
-            label={prefs.showIgnored ? t("hideIgnored") : t("showIgnored")}
-            active={prefs.showIgnored}
-            disabled={remoteReadOnly}
-            onClick={() => persistPrefs({ showIgnored: !prefs.showIgnored })}
-          >
-            <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z" />
-            <circle cx="12" cy="12" r="3" />
-          </IconButton>
-          <IconButton
-            label={remoteReadOnly ? t("remoteReadOnly") : !watchAvailable && prefs.watchFiles ? t("watchFallback") : prefs.watchFiles ? t("watchOn") : t("watchOff")}
-            active={prefs.watchFiles && !remoteReadOnly}
-            disabled={remoteReadOnly}
-            onClick={() => persistPrefs({ watchFiles: !prefs.watchFiles })}
-          >
-            <path d="M4.5 11a7.5 7.5 0 1 1 1.8 6M4 6v5h5M12 8v4l3 2" />
-          </IconButton>
-        </span>
+        {remoteReadOnly ? <span className="fm-topbar-note" role="status">{t("remoteReadOnly")}</span> : null}
+
+        {syncInfo?.state === "repository" && (
+          <GitSync key={repoContext?.rootPath} info={syncInfo} t={t} disabled={!git.infoReady || !!git.operation}
+            busy={git.operation === "sync"} onRun={git.sync} />
+        )}
+
+        <span className="fm-topbar-grow" />
+        <div className="fm-topbar-tools">
+
+        <IconButton
+          label={prefs.showIgnored ? t("hideIgnored") : t("showIgnored")}
+          active={prefs.showIgnored}
+          disabled={remoteReadOnly}
+          onClick={() => persistPrefs({ showIgnored: !prefs.showIgnored })}
+        >
+          <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z" />
+          <circle cx="12" cy="12" r="3" />
+        </IconButton>
+        <IconButton
+          label={remoteReadOnly ? t("remoteReadOnly") : !watchAvailable && prefs.watchFiles ? t("watchFallback") : prefs.watchFiles ? t("watchOn") : t("watchOff")}
+          active={prefs.watchFiles && !remoteReadOnly}
+          disabled={remoteReadOnly}
+          onClick={() => persistPrefs({ watchFiles: !prefs.watchFiles })}
+        >
+          <path d="M4.5 11a7.5 7.5 0 1 1 1.8 6M4 6v5h5M12 8v4l3 2" />
+        </IconButton>
+        {/*
+          Wrap and theme are view preferences, not file actions, so they sit at
+          the far right after the toggles that change *what* is listed. Wrap is
+          only meaningful for the code view, hence the disabled state elsewhere.
+        */}
+        <IconButton
+          label={wrapLines ? t("wrapOff") : t("wrapOn")}
+          active={wrapLines}
+          disabled={!sourceVisible}
+          onClick={() => persistPrefs({ wrapLines: !wrapLines })}
+        >
+          <path d="M4 6h16M4 12h11a3 3 0 1 1 0 6h-3l2-2m-2 2 2 2M4 18h4" />
+        </IconButton>
+        <IconButton label={t("refresh")} onClick={() => { refreshTree(); git.refresh(); }}>
+          <path d="M20 11a8 8 0 0 0-14.9-3.9L3 9" />
+          <path d="M3 4v5h5" />
+          <path d="M4 13a8 8 0 0 0 14.9 3.9L21 15" />
+          <path d="M21 20v-5h-5" />
+        </IconButton>
+        {/*
+          Light/dark follows the host, but a manual override is sometimes the only
+          way to read a diff: this only flips the local palette (`data-base`),
+          which every rule in this stylesheet is written against.
+        */}
+        <IconButton
+          label={base === "dark" ? t("themeLight") : t("themeDark")}
+          onClick={() => {
+            const next = base === "dark" ? "light" : "dark";
+            setBase(next);
+            applyBase(next);
+          }}
+        >
+          {base === "dark"
+            ? <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />
+            : <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>}
+        </IconButton>
+        </div>
       </header>
+      {globalError && <div className="fm-workbench-alert" role="alert">{globalError}</div>}
 
-      <div ref={bodyRef} className="flex min-h-0 flex-1">
-            <aside
-              className={prefs.treeCollapsed ? "hidden" : "flex min-h-0 min-w-0 flex-col"}
-              style={{ width: `${prefs.splitRatio * 100}%`, background: "var(--surface)" }}
-            >
-              {root && activeRoot && <div className={gitOpen ? "min-h-0 flex-1" : "hidden"} role="tabpanel" aria-label={t("gitChangesPanel")}>
-                {remoteReadOnly ? <p className="scm-guide">{t("remoteReadOnly")}</p> : <>
-                <GitPanel locale={hostLocale} workspacePath={root.path} rootPath={activeRoot.path} projectId={root.projectId}
-                  active={gitOpen && !prefs.treeCollapsed} refreshKey={gitRefresh} selection={previewTab}
-                  onInspect={commit => { setInspectedCommit(commit); setPreviewTab(null); }}
-                  onSelect={(item, revision) => { setInspectedCommit(null); setPreviewTab({ ...item, revision }); setShowPreview(true); }}
-                  onSnapshot={(entries, revision) => setPreviewTab(prev => {
-                    if (!prev) return null;
-                    const e = entries.find(e => e.path === prev.path);
-                    if (!e) return null;
-                    const staged = e.index !== "?" && e.index !== " ";
-                    const scope = (prev.scope === "staged" && staged) || e.worktree === " " ? "staged" : "worktree";
-                    return { path: prev.path, scope, revision };
-                  })} onChanged={() => { refreshTree(); if (diff) void loadDiff(diff.path); }} />
-                </>}
-              </div>}
-              <div className={gitOpen ? "hidden" : "flex min-h-0 flex-1 flex-col"} role="tabpanel" aria-label={t("treeSection")}>
-              <div className="flex flex-none items-center gap-1.5 px-2.5 pb-1.5 pt-2">
-                <div className="relative flex min-w-0 flex-1 items-center">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--faint)", position: "absolute", left: 7 }} aria-hidden="true">
-                    <circle cx="11" cy="11" r="7" />
-                    <path d="m20 20-3.5-3.5" />
-                  </svg>
-                  <input
-                    value={query}
-                    disabled={remoteReadOnly}
-                    title={remoteReadOnly ? t("remoteReadOnly") : undefined}
-                    onChange={(event) => setQuery(event.target.value)}
-                    placeholder={t("searchPlaceholder")}
-                    aria-label={t("search")}
-                    className="w-full rounded-md border py-1 pl-6 pr-6 text-[11.5px] outline-none"
-                    style={{ borderColor: "var(--border-strong)", background: "var(--bg)", color: "var(--fg)" }}
-                  />
-                  {query ? (
-                    <button
-                      type="button"
-                      aria-label={t("clear")}
-                      onClick={() => setQuery("")}
-                      className="absolute right-1 inline-flex h-5 w-5 items-center justify-center rounded border-0 bg-transparent"
-                      style={{ color: "var(--faint)" }}
-                    >
-                      ×
-                    </button>
-                  ) : null}
+      <div ref={bodyRef} className="fm-body" data-resizing={sidebar.dragging || undefined}>
+        <ActivityRail
+          view={view}
+          onView={showView}
+          hidden={!sidebarOpen}
+          badge={git.changesReady && git.snapshot ? git.snapshot.entries.length : gitSummary?.total ?? 0}
+          label={t("workbenchViews")}
+          labels={{ files: t("viewFiles"), search: t("viewSearch"), git: t("viewGit") }}
+        >
+          <button
+            type="button"
+            className="fm-rail-btn"
+            aria-expanded={sidebarOpen}
+            aria-controls="fm-sidebar"
+            aria-label={t("toggleSidebar")}
+            title={`${t("toggleSidebar")} · Ctrl+B`}
+            onClick={() => persistPrefs({ treeCollapsed: !prefs.treeCollapsed })}
+          >
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9 4v16" />
+            </svg>
+          </button>
+        </ActivityRail>
+
+        <aside
+          id="fm-sidebar" className="fm-sidebar" role="tabpanel" hidden={!sidebarOpen}
+          style={{ width: sidebar.width }} aria-labelledby={segmentId("fm-sidebar", view)}
+        >
+          {sidebarOpen ? (
+            <>
+              {/*
+                One header per view: an uppercase title (which view am I in) and
+                the actions that belong to it. The body below is the only thing
+                that swaps, so the header row never jumps.
+              */}
+              <div className="fm-side-head">
+                <span className="fm-side-title">{view === "git" ? t("sourceControl") : view === "search" ? t("viewSearch") : t("explorer")}</span>
+                {view === "files" ? (
+                  <span className="fm-side-actions">
+                    <IconButton small label={remoteReadOnly ? t("remoteReadOnly") : t("newFile")} disabled={remoteReadOnly}
+                      onClick={() => setPrompt({ kind: "newFile", parent: selectedDirectory })}>
+                      <path d="M6 3h8l4 4v14H6z" /><path d="M12 11v6M9 14h6" />
+                    </IconButton>
+                    <IconButton small label={remoteReadOnly ? t("remoteReadOnly") : t("newFolder")} disabled={remoteReadOnly}
+                      onClick={() => setPrompt({ kind: "newFolder", parent: selectedDirectory })}>
+                      <path d="M3 6h6l2 2h10v12H3z" /><path d="M12 12v5M9.5 14.5h5" />
+                    </IconButton>
+                    <IconButton small label={t("collapseAll")} disabled={!expanded.size} onClick={collapseAll}>
+                      <path d="M4 8h16M4 16h16" />
+                    </IconButton>
+                  </span>
+                ) : null}
+                {view === "git" && repoContext && (
+                  <span className="fm-side-actions">
+                    <IconButton small label={t("refresh")} disabled={!!git.operation} onClick={() => { refreshTree(); git.refresh(); }}>
+                      <GitIconPath name="refresh" />
+                    </IconButton>
+                  </span>
+                )}
+              </div>
+
+              {view === "git" ? (
+                <div className="fm-side-body fm-side-body-flush">
+                  {repoContext ? <GitPanel git={git} context={repoContext} segment={gitSegment} onSegment={setGitSegment}
+                    selection={activeDiff && { path: activeDiff.path, scope: diffScope }} inspected={activeCommit} locale={hostLocale} t={t}
+                    onInspect={commit => openReview({ kind: "commit", commit })}
+                    onSelect={item => openReview({ kind: "diff", panel: true, ...item })} /> :
+                    <p className="scm-guide">{t(remoteReadOnly ? "remoteReadOnly" : "noWorkspaceTitle")}</p>}
                 </div>
-                <IconButton label={t("expandAll")} small disabled={searchActive || expanding} onClick={() => void expandAll()}>
-                  <path d="m8 8 4-4 4 4M8 16l4 4 4-4" />
-                </IconButton>
-                <IconButton label={t("collapseAll")} small disabled={searchActive || (!expanding && !expanded.size)} onClick={collapseAll}>
-                  <path d="m8 4 4 4 4-4M8 20l4-4 4 4" />
-                </IconButton>
-              </div>
-
-              {/* 搜索时这行是命中数；平时是 git 概览（分支 + 各类变化的文件数），
-                  也就是「这个工作区现在脏不脏、脏在哪」的一句话。 */}
-              <div className="flex flex-none items-center justify-between gap-2 px-3 pb-1 text-[10.5px] font-medium uppercase tracking-wider" style={{ color: "var(--muted)" }}>
-                <span className="min-w-0 truncate normal-case">
-                  {searchActive ? t("search") : (gitSummaryText(gitSummary, t) ?? t("treeSection"))}
-                </span>
-                <span className="tabular-nums" style={{ color: "var(--faint)" }}>
-                  {searchActive
-                    ? search.running
-                      ? t("searchScanning")
-                      : String(search.hits.length)
-                    : ""}
-                </span>
-              </div>
-
-              {searchActive ? (
-                <div className="min-h-0 flex-1 overflow-auto px-1.5 pb-4" role="listbox" aria-label={t("search")}>
-                  {search.running && !search.hits.length && <Skeleton kind="list" label={t('searchScanning')} />}
-                  {search.hits.length === 0 && !search.running ? (
-                    <div className="px-3 py-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
-                      {t("searchEmpty")}
+              ) : view === "search" ? (
+                <div className="fm-side-body">
+                  <div className="fm-search">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+                      <circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" />
+                    </svg>
+                    <input
+                      ref={searchInput}
+                      value={query}
+                      disabled={remoteReadOnly}
+                      onChange={(event) => setQuery(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Escape") setQuery(""); }}
+                      placeholder={t("searchPlaceholder")}
+                      aria-label={t("search")}
+                    />
+                    {query ? <button type="button" aria-label={t("clear")} onClick={() => setQuery("")}>×</button> : null}
+                  </div>
+                  {searchActive ? <p className="fm-side-caption" role="status">
+                    {search.running ? t("searchScanning") : t("searchResultsCount", { count: search.hits.length })}
+                  </p> : <p className="fm-side-hint">{t("searchHint")}</p>}
+                  {searchActive ? (
+                    <div className="fm-search-results" role="group" aria-label={t("search")}>
+                      {search.running && !search.hits.length && <Skeleton kind="list" label={t('searchScanning')} />}
+                      {!search.hits.length && !search.running ? <p className="fm-side-hint">{t("searchEmpty")}</p> : null}
+                      {search.hits.map((hit) => (
+                        <button
+                          key={hit.path}
+                          type="button"
+                          title={hit.path}
+                          className="fm-search-hit"
+                          onClick={() => void openHit(hit)}
+                        >
+                          <FileIcon name={hit.name} isDirectory={hit.isDirectory} size={13} />
+                          <span className="fm-search-hit-name">{hit.name}</span>
+                          <span className="fm-search-hit-dir" dir="rtl">{parentOf(hit.path)}</span>
+                        </button>
+                      ))}
                     </div>
                   ) : null}
-                  {search.hits.map((hit) => (
-                    <button
-                      key={hit.path}
-                      type="button"
-                      role="option"
-                      aria-selected={selected === hit.path}
-                      title={hit.path}
-                      onClick={() => {
-                        const path = hit.path;
-                          setQuery("");
-                          const segments = path.split("/");
-                          const parents: string[] = [];
-                          for (let index = 1; index < segments.length; index += 1) {
-                            parents.push(segments.slice(0, index).join("/"));
-                          }
-                          setExpanded((prev) => new Set([...prev, ...parents]));
-                          if (hit.isDirectory) {
-                            void loadDirectory(path, true).then(() => setSelected(path));
-                            void (async () => {
-                              for (const parent of parents) await loadDirectory(parent);
-                            })();
-                          } else {
-                            setSelected(path);
-                            void (async () => {
-                              for (const parent of parents) await loadDirectory(parent);
-                              await openEntry({ path, name: hit.name, isDirectory: false } as FileEntry);
-                            })();
-                          }
-                      }}
-                      className="flex w-full cursor-pointer items-center gap-1.5 rounded-md border-0 px-2 py-[3px] text-left text-[12px] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--fg)]"
-                      style={{ color: "var(--secondary)", minHeight: 24 }}
-                    >
-                      <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-                        {hit.name}
-                      </span>
-                      <span className="flex-none overflow-hidden text-ellipsis whitespace-nowrap text-[10px]" style={{ color: "var(--faint)", maxWidth: "45%" }} dir="rtl">
-                        {parentOf(hit.path)}
-                      </span>
-                    </button>
-                  ))}
                 </div>
               ) : (
-                <Tree
-                  key={activeRoot?.path}
-                  onMove={remoteReadOnly || saving ? undefined : moveEntry}
-                  directories={directories}
-                  expanded={expanded}
-                  selected={selected}
-                  showIgnored={prefs.showIgnored}
-                  t={t}
-                  onToggle={toggleDirectory}
-                  onOpen={requestOpen}
-                  onRefreshDir={(path) => void loadDirectory(path, true)}
-                  onContextMenu={openMenu}
-                />
-              )}
-
-              {prefs.showIgnored || !ignoreActive ? null : (
-                <div className="flex-none px-3 pb-2 text-[10.5px]" style={{ color: "var(--faint)" }}>
-                  {t("ignoredHidden")}
+                <div className="fm-side-body">
+                  {/* 树里这一条筛选只过滤已经加载的目录；整个项目的查找在「搜索」视图。 */}
+                  <div className="fm-search">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" aria-hidden="true">
+                      <circle cx="11" cy="11" r="6" /><path d="m16 16 4 4" />
+                    </svg>
+                    <input
+                      value={filter}
+                      onChange={(event) => setFilter(event.target.value)}
+                      onKeyDown={(event) => { if (event.key === "Escape") setFilter(""); }}
+                      placeholder={t("filterPlaceholder")}
+                      aria-label={t("filterFiles")}
+                    />
+                    {filter ? <button type="button" aria-label={t("clear")} onClick={() => setFilter("")}>×</button> : null}
+                  </div>
+                  <div className="fm-side-caption" title={gitSummaryText(gitSummary, t) ?? undefined}>
+                    <span>{gitSummaryText(gitSummary, t) ?? t("treeSection")}</span>
+                    <span className="fm-side-caption-actions">
+                      <IconButton small label={t("expandAll")} disabled={expanding} onClick={() => void expandAll()}>
+                        <path d="m8 8 4-4 4 4M8 16l4 4 4-4" />
+                      </IconButton>
+                    </span>
+                  </div>
+                  <Tree
+                    key={activeRoot?.path}
+                    onMove={remoteReadOnly || saving ? undefined : moveEntry}
+                    directories={directories}
+                    expanded={expanded}
+                    selected={selected}
+                    showIgnored={prefs.showIgnored}
+                    t={t}
+                    filter={filter}
+                    onToggle={path => { setSelected(path); toggleDirectory(path); }}
+                    onOpen={requestOpen}
+                    onRefreshDir={(path) => void loadDirectory(path, true)}
+                    onContextMenu={openMenu}
+                  />
+                  {prefs.showIgnored || !ignoreActive ? null : (
+                    <p className="fm-side-hint">{t("ignoredHidden")}</p>
+                  )}
                 </div>
               )}
+            </>
+          ) : null}
+        </aside>
+
+        {sidebarOpen ? <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("sidebarWidth")}
+          aria-controls="fm-sidebar"
+          className="fm-gutter" {...sidebar.splitter}
+        /> : null}
+
+        <section className="fm-content" aria-label={t("title")}>
+          {documentTabs.length || review.tabs.length ? (
+            <div ref={stripRef} role="tablist" aria-label={t("openDocuments")} className="fm-document-tabs">
+              {documentTabs.map(({ file, dirty: modified }) => {
+                const name = baseNameOf(file.path);
+                const label = (nameCounts.get(name) ?? 0) > 1 ? `${name} — ${parentOf(file.path) || "."}` : name;
+                const active = file.path === openFile?.path && !activeReview;
+                return <div className="fm-file-tab" key={file.path} data-active={active}>
+                  <PaneTab id={fileTabId(file.path)} label={label} title={file.path} accessible={label + (modified ? " •" : "")} dirty={modified}
+                    icon={<FileIcon name={name} isDirectory={false} size={13} />} active={active} onClick={() => void openEntry({ path: file.path })} />
+                  <button type="button" className="fm-tab-close" title={`${t("close")} ${file.path}`} aria-label={`${t("close")} ${file.path}`}
+                    disabled={saving} onClick={() => closeTab(file.path)}>×</button>
+                </div>;
+              })}
+              {review.tabs.map(tab => {
+                const key = reviewKey(tab);
+                const active = key === review.active;
+                const path = tab.kind === "diff" ? tab.path : tab.commit.oid;
+                const label = tab.kind === "diff" ? baseNameOf(path) : path.slice(0, 7);
+                const detail = tab.kind === "commit" ? t("gitCommit") : active && diffEntry && git.changesReady
+                  ? t(diffScope === "staged" ? "diffScopeStaged" : "diffScopeWorktree") : t("changes");
+                const description = tab.kind === "diff" ? `${path} · ${t("changes")}` : `${path.slice(0, 7)} · ${t("commitDetail")}`;
+                return <div className="fm-file-tab" key={key} data-active={active}>
+                  <PaneTab id={reviewTabId(key)} label={label} title={tab.kind === "diff" ? path : `${path} · ${tab.commit.subject}`}
+                    accessible={description} detail={detail} icon={<GitIcon name={tab.kind === "diff" ? "changes" : "commit"} size={13} />}
+                    active={active} onClick={() => activateReview(key)} />
+                  <button type="button" className="fm-tab-close" title={`${t("close")} ${description}`} aria-label={`${t("close")} ${description}`}
+                    onClick={() => closeReview(key)}>×</button>
+                </div>;
+              })}
+            </div>
+          ) : <div className="fm-document-tabs"><span className="fm-tabs-empty">{t("openDocuments")}</span></div>}
+
+          {(openingPath || activeDiff || (openFile && !activeReview)) && <ContentBar>
+            {openingPath ? <span className="fm-bar-title">{baseNameOf(openingPath)}</span> : activeDiff && !relatedDiff ? (
+              <span className="fm-bar-title fm-bar-mono" title={activeDiff.path}>{activeDiff.path}</span>
+            ) : openFile && <>
+              {openFileGit && <span className="git-badge" style={{ color: gitColor(openFileGit.status) }} title={gitTitle(openFileGit, t)}>
+                {gitGlyph(openFileGit.status)}
+              </span>}
+              <button type="button" className="fm-editor-path" title={`${t("copyPath")} · ${displayFilePath}`} aria-label={t("copyPath")}
+                onClick={() => void copyPath(displayFilePath)}>{displayFilePath}</button>
+              {options.length > 1 && <Segmented<ViewerMode | "diff"> label={t("viewMode")} panelId="fm-file-view" value={viewMode}
+                options={options.map(({ key }) => ({ value: key, label: t(key === "diff" ? "changes" : MODE_LABEL[key]),
+                  detail: key === "diff" && openFileGit && (openFileGit.added || openFileGit.deleted) ? `+${openFileGit.added} −${openFileGit.deleted}` : undefined }))}
+                onChange={mode => {
+                  if (mode === "diff") openDiff(openFile.path);
+                  else { dispatchReview({ type: "document" }); changeViewerMode(mode); }
+                }} />}
+              {!activeReview && <div className="fm-file-tools">
+                <span className="fm-editor-fact">{formatSize(openFile.size)}</span>
+                {openFile.kind === "text" && <span className="fm-editor-fact">{t(openFile.readOnly ? "readOnly" : saving ? "saving" : dirty ? "dirty" : "saved")}</span>}
+                <IconButton small label={t("reload")} onClick={reloadFromDisk} disabled={saving}><GitIconPath name="refresh" /></IconButton>
+                {openFile.kind === "text" && <IconButton small label={t("save")} disabled={!dirty || saving || openFile.readOnly} onClick={() => void save()}>
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8" />
+                </IconButton>}
+              </div>}
+            </>}
+          </ContentBar>}
+
+          <div className="fm-views" id="fm-content-panel" role={activeTabId ? "tabpanel" : undefined} aria-labelledby={activeTabId}>
+            <div className="fm-views" id="fm-file-view" role={options.length > 1 ? "tabpanel" : undefined}
+              aria-labelledby={options.length > 1 ? segmentId("fm-file-view", viewMode) : undefined}>
+              {repoContext && activeCommit && <div className="fm-view">
+                <GitCommitDetail oid={activeCommit.oid} locale={hostLocale} {...repoContext} />
+              </div>}
+              {repoContext && activeDiff && <div className="fm-view">
+                <GitPreview key={reviewKey(activeDiff)} path={activeDiff.path} context={repoContext} panel={activeDiff.panel}
+                  scope={diffScope} version={git.version} revision={activeDiff.panel ? git.snapshot?.revision : undefined}
+                  pending={!!git.operation || (activeDiff.panel && !git.changesReady && !diffUnavailable)}
+                  unchanged={activeDiff.panel && git.changesReady && !!git.snapshot && !diffEntry}
+                  unavailable={diffUnavailable}
+                  onBack={!activeDiff.panel || documents.get(activeDiff.path) || (diffEntry && diffEntry.worktree !== "D" && diffEntry.index !== "D")
+                    ? () => void openEntry({ path: activeDiff.path }) : undefined}
+                  onScope={(scope: GitScope) => dispatchReview({ type: "scope", key: reviewKey(activeDiff), scope })} onRefresh={git.refresh} t={t} />
+              </div>}
+              {openingPath && <div className="fm-view" aria-busy="true" aria-label={openingPath}>
+                <Skeleton kind={/\.pdf$/i.test(openingPath) ? "page" : /\.(?:csv|tsv|xlsx|db|sqlite)$/i.test(openingPath) ? "table" : "lines"} label={`${t("loading")} ${baseNameOf(openingPath)}`} />
+              </div>}
+              <div className="fm-view" hidden={!documentVisible || !openFile}>
+                <EditorPane file={openFile} visible={documentVisible} base={base} locale={hostLocale} dirty={dirty} saving={saving}
+                  activeRoot={fileRoot} workspacePath={root?.path} viewer={viewer} tablePageSize={prefs.tablePageSize} t={t}
+                  handleRef={handleRef} restore={documents.active?.editor} onPosition={caret.update} wrap={wrapLines}
+                  onDirty={() => { if (openFile && !documents.get(openFile.path)?.dirty) documents.patch(openFile.path, { dirty: true }); }}
+                  onSave={() => void save()} onReload={reloadFromDisk} onTablePageSize={size => persistPrefs({ tablePageSize: size })}
+                  onLink={onLink} externalChange={externalChange} />
               </div>
-            </aside>
-
-            {!prefs.treeCollapsed && <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize"
-              onMouseDown={startResize}
-              className="w-[3px] flex-none cursor-col-resize transition-colors hover:bg-[var(--surface-hover)]"
-              style={{ background: "var(--border)" }}
-            />}
-
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          {(openFile || previewTab || inspectedCommit) && <div ref={stripRef} role="tablist" aria-label={t('openDocuments')} className="fm-document-tabs">
-            {documents.tabs.map(({ file, dirty: modified }) => {
-              const name = baseNameOf(file.path);
-              const duplicate = documents.tabs.some(other => other.file.path !== file.path && baseNameOf(other.file.path) === name);
-              const label = duplicate ? `${name} — ${parentOf(file.path) || '.'}` : name;
-              const active = file.path === openFile?.path && !inspectedCommit && !(previewTab && showPreview);
-              return <div className="fm-file-tab" key={file.path} data-active={active}>
-                <PaneTab label={label} title={file.path} accessible={label + (modified ? ' •' : '')} dirty={modified}
-                  icon={<FileIcon name={name} isDirectory={false} size={13} />} active={active} onClick={() => void openEntry({ path: file.path })} />
-                <button type="button" className="fm-tab-close" title={`${t('close')} ${file.path}`} aria-label={`${t('close')} ${file.path}`} disabled={saving} onClick={() => closeTab(file.path)}>×</button>
-              </div>;
-            })}
-            {previewTab && <div className="fm-preview-tab" data-active={showPreview || !openFile}>
-              <PaneTab label={baseNameOf(previewTab.path)} title={`${previewTab.path} · ${t(previewTab.scope === "staged" ? "gitScopeStaged" : "gitScopeWorktree")}`}
-                accessible={`${baseNameOf(previewTab.path)} · ${t(previewTab.scope === "staged" ? "gitScopeStaged" : "gitScopeWorktree")}`}
-                detail={t(previewTab.scope === "staged" ? "indexTab" : "workingTab")} active={showPreview || !openFile} onClick={() => setShowPreview(true)} />
-              <button type="button" className="fm-tab-close" title={t("closeChanges")} aria-label={t("closeChanges")} onClick={() => setPreviewTab(null)}>
-                <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>
-              </button>
-            </div>}
-          </div>}
-          {inspectedCommit && root && activeRoot && <section className="flex min-h-0 flex-1 flex-col" aria-label={inspectedCommit.subject}>
-            <header className="scm-actions"><span title={inspectedCommit.oid}>{inspectedCommit.oid.slice(0, 8)} · {inspectedCommit.subject}</span><IconButton small label={t('close')} onClick={() => setInspectedCommit(null)}><path d="m6 6 12 12M18 6 6 18" /></IconButton></header>
-            <div className="min-h-0 flex-1"><GitCommitDetail oid={inspectedCommit.oid} locale={hostLocale} workspacePath={root.path} projectId={root.projectId} rootPath={activeRoot.path} /></div>
-          </section>}
-          {previewTab && (showPreview || !openFile) && root && activeRoot && <div role="tabpanel" aria-label={previewTab.path} className="min-h-0 flex-1">
-            <GitPreview key={JSON.stringify([activeRoot.path, previewTab.path, previewTab.scope])} tab={previewTab} workspacePath={root.path} rootPath={activeRoot.path} projectId={root.projectId} t={t}
-              onClose={() => setPreviewTab(null)} onRefresh={() => setGitRefresh(n => n + 1)} />
-          </div>}
-          {openingPath && !inspectedCommit && !showPreview && <section aria-busy="true" aria-label={openingPath} className="min-h-0 flex-1 overflow-hidden">
-            <Skeleton kind={/\.pdf$/i.test(openingPath) ? 'page' : /\.(?:csv|tsv|xlsx|db|sqlite)$/i.test(openingPath) ? 'table' : 'lines'} label={`${t('loading')} ${baseNameOf(openingPath)}`} />
-          </section>}
-          <div className={openingPath || inspectedCommit || (previewTab && (showPreview || !openFile)) ? "hidden" : "flex min-h-0 flex-1"}>
-        <EditorPane
-          file={openFile}
-          base={base}
-          locale={hostLocale}
-          dirty={dirty}
-          saving={saving}
-          error={error}
-          activeRoot={root?.remote && activeRoot ? { ...activeRoot, path: root.remote.path } : activeRoot}
-          workspacePath={root?.path}
-          git={openFileGit}
-          viewer={viewer}
-          tablePageSize={prefs.tablePageSize}
-          t={t}
-          handleRef={handleRef}
-          restore={documents.active?.editor}
-          onDirty={() => { if (openFile && !documents.get(openFile.path)?.dirty) documents.patch(openFile.path, { dirty: true }); }}
-          onSave={() => void save()}
-          onReload={reloadFromDisk}
-          onViewerMode={changeViewerMode}
-          onTablePageSize={(size) => persistPrefs({ tablePageSize: size })}
-          onLink={onLink}
-          // 有未保存改动时，监听只提示不覆盖（见 applyWatchChanges 的注释）。
-          externalChange={externalChange}
-          diff={diff}
-          onOpenDiff={() => openFile && openDiff(openFile.path)}
-          onCloseDiff={closeDiff}
-          onRefreshDiff={() => diff && loadDiffRef.current(diff.path)}
-        />
+            </div>
+            {!openFile && !activeReview && !openingPath && root ? (
+              <div className="fm-empty">
+                <span className="fm-empty-glyph">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M3 6h6l2 2h10v12H3z" />
+                  </svg>
+                </span>
+                <h3>{t("emptyWorkspaceTitle")}</h3>
+                <p>{t("emptyWorkspaceCopy")}</p>
+                <div className="fm-empty-actions">
+                  <button type="button" className="fm-tbtn" onClick={() => showView("files")}>{t("viewFiles")}</button>
+                  <button type="button" className="fm-tbtn" onClick={() => showView("git")}>{t("changes")}</button>
+                </div>
+                <div className="fm-empty-kbd">
+                  <span>Ctrl+Shift+E</span><span>Ctrl+Shift+F</span><span>Ctrl+Shift+G</span><span>Ctrl+B</span>
+                </div>
+              </div>
+            ) : null}
           </div>
-        </div>
+        </section>
       </div>
-      <div role="tablist" aria-label={t("projectFiles")} className="fm-activity-bar fm-list-switch">
-        <PaneTab label="" accessible={t("treeSection")} title={t("treeSection")} active={!gitOpen} icon={<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d="M3 6h6l2 2h10v12H3z"/><path d="M5 4h6l2 2h6"/></svg>}
-          onClick={() => { setGitOpen(false); setShowPreview(false); setInspectedCommit(null); persistPrefs({ treeCollapsed: false }); }} />
-        <PaneTab label="" accessible={t("gitChangesPanel")} title={t("gitChangesPanel")} active={gitOpen} icon={<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="4" cy="3" r="1.6"/><circle cx="4" cy="13" r="1.6"/><circle cx="12" cy="4" r="1.6"/><path d="M4 5v6m0-1c5 0 8-1 8-4"/></svg>}
-          onClick={() => { setGitOpen(true); persistPrefs({ treeCollapsed: false }); }} />
-      </div>
+
+      <StatusBar
+        t={t}
+        branch={syncInfo?.state === "repository" ? syncInfo.branch || gitSummary?.branch || null : gitSummary?.branch ?? null}
+        upstream={syncInfo?.upstream ?? null}
+        ahead={syncInfo?.ahead ?? null}
+        behind={syncInfo?.behind ?? null}
+        watching={remoteReadOnly || !root ? null : prefs.watchFiles && watchAvailable}
+        watchLabel={!prefs.watchFiles ? t("statusNotWatching") : t(watchAvailable ? "statusWatching" : "statusPolling")}
+        cursor={sourceVisible ? caret : undefined} kind={kind}
+      />
 
       {menu ? (
         <ContextMenu x={menu.x} y={menu.y} entries={menuEntries()} onClose={() => setMenu(null)} />
@@ -1646,19 +1799,12 @@ export default function App() {
   );
 }
 
-function PaneTab({ label, title, active, onClick, accessible, detail, dirty, icon }: {
-  label: string; title?: string; active: boolean; onClick: () => void; accessible?: string;
+function PaneTab({ id, label, title, active, onClick, accessible, detail, dirty, icon }: {
+  id: string; label: string; title?: string; active: boolean; onClick: () => void; accessible?: string;
   detail?: string; dirty?: boolean; icon?: React.ReactNode;
 }) {
-  return <button type="button" role="tab" aria-selected={active} aria-label={accessible ?? label} tabIndex={active ? 0 : -1}
-    title={title ?? label} className="fm-tab" onClick={onClick} onKeyDown={event => {
-      const list = event.currentTarget.closest('[role="tablist"]');
-      if (!list || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-      const tabs = Array.from(list.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-      const index = tabs.indexOf(event.currentTarget);
-      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-      event.preventDefault(); tabs[next].focus(); tabs[next].click();
-    }}>
+  return <button type="button" role="tab" id={id} aria-controls="fm-content-panel" aria-selected={active} aria-label={accessible ?? label} tabIndex={active ? 0 : -1}
+    title={title ?? label} className="fm-tab" onClick={onClick} onKeyDown={event => nextTab(event)?.click()}>
     {icon}<span className="fm-tab-name">{label}</span>{dirty && <span className="fm-dirty-dot" aria-hidden="true" />}
     {detail && <span className="fm-tab-detail">{detail}</span>}
   </button>;

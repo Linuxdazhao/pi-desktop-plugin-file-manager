@@ -199,9 +199,28 @@ function createGitSync({ gitContext, gitBusy, invalidateGitSnapshots, isDenied, 
           const token = crypto.createHmac("sha256", secret).update(JSON.stringify([ctx.key, st.dev, st.ino, raw, branch, head, pushRemote, target(pushRemote), expectedOid])).digest("hex");
           return { remote: pushRemote, branch: target(pushRemote), expectedOid, token };
         }
+        // Counts describe the locally fetched upstream, not a live remote. A
+        // missing ref or a bounded read failing must not disable sync actions.
+        async function divergence(forceLease) {
+          if (!head || !upstream) return {};
+          try {
+            const upstreamHead = pushRemote === upstreamRemote && forceLease
+              ? forceLease.expectedOid : await resolve(tracking(upstreamRemote));
+            if (!upstreamHead) return {};
+            const counts = (await git(["rev-list", "--left-right", "--count", `${head}...${upstreamHead}`])).trim();
+            const match = /^(\d{1,9})\s+(\d{1,9})$/.exec(counts);
+            return match ? { ahead: Number(match[1]), behind: Number(match[2]) } : {};
+          } catch (e) {
+            if (e.code === "GIT_LIMIT" || e.code === "GIT_FAILED") return {};
+            throw e;
+          }
+        }
         if (!mutate) {
-          const forceLease = await lease(); await check();
-          return { ok: true, state, branch, remotes, ...(upstream && { upstream }), ...(forceLease && { forceLease }),
+          const forceLease = await lease();
+          const counts = await divergence(forceLease);
+          await check();
+          return { ok: true, state, branch, hasHead: Boolean(head), remotes, ...(upstream && { upstream }), ...(forceLease && { forceLease }),
+            ...counts,
             ...(remotes.includes(defaultRemote) && { defaultRemote }), ...(remotes.includes(pushRemote) && { pushRemote }) };
         }
         if (p.branch !== undefined && p.branch !== branch) throw stale();

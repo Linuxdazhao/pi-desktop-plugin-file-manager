@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件管理器 · 活动栏 + 侧边栏（完整 demo）</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #101012; --panel: #181818; --line: #ffffff1a;
+    --fg: #ffffff; --muted: #ffffff85; --faint: #ffffff4d;
+    --added: #3fb950; --modified: #d29922; --deleted: #f85149; --renamed: #58a6ff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 26px 54px; min-height: 100vh;
+    background: radial-gradient(1100px 540px at 14% -14%, #ffffff10, transparent 70%), var(--bg);
+    color: var(--fg); font: 13px/1.55 var(--sans); -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1020px; margin: 0 auto; }
+  .kicker { font: 10.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+  h1 { margin: 8px 0 6px; font-size: 25px; letter-spacing: -.015em; font-weight: 650; }
+  .lead { margin: 0 0 4px; max-width: 700px; color: var(--muted); }
+  .badges { display: flex; gap: 6px; flex-wrap: wrap; margin: 12px 0 24px; }
+  .b { font: 10px/1 var(--mono); padding: 4px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--faint); }
+
+  .hero {
+    display: block; padding: 18px 18px 16px; margin-bottom: 16px; text-decoration: none; color: inherit;
+    background: linear-gradient(180deg, #1d1d21, var(--panel)); border: 1px solid #ffffff33; border-radius: 12px;
+    transition: border-color .15s, transform .15s;
+  }
+  .hero:hover { border-color: #ffffff5c; transform: translateY(-2px); }
+  .hero .tag { font: 10px/1 var(--mono); color: var(--added); letter-spacing: .1em; }
+  .hero h2 { margin: 8px 0 6px; font-size: 18px; }
+  .hero p { margin: 0; color: var(--muted); font-size: 12.5px; max-width: 760px; }
+  .hero .go { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 12px; color: var(--fg); font-weight: 600; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 22px; }
+  .card { padding: 12px 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; }
+  .card h3 { margin: 0 0 5px; font-size: 12px; font-weight: 600; }
+  .card p { margin: 0; font-size: 11px; line-height: 1.65; color: var(--muted); }
+  .card code { font: 10px/1.5 var(--mono); color: var(--secondary, #ffffffc0); }
+
+  h4.sec { margin: 30px 0 10px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .others { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; }
+  .other { display: block; padding: 11px 12px; text-decoration: none; color: inherit; background: #151517; border: 1px solid var(--line); border-radius: 8px; }
+  .other:hover { border-color: #ffffff3d; }
+  .other b { display: block; font-size: 12px; margin-bottom: 3px; }
+  .other span { font-size: 11px; color: var(--faint); }
+
+  footer { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--faint); font-size: 11.5px; display: grid; gap: 5px; }
+  footer code { font: 10.5px/1.5 var(--mono); color: var(--muted); }
+  @media (prefers-reduced-motion: reduce) { .hero { transition: none; } .hero:hover { transform: none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="kicker">pi.file-manager · git mode · 选定方案</span>
+  <h1>活动栏 + 侧边栏</h1>
+  <p class="lead">方案二的完整实现：不只有 Git，文件浏览、编辑、预览与 Git 管理都在同一个面板里。</p>
+  <div class="badges">
+    <span class="b">44px 活动栏</span><span class="b">300px 单侧栏（可拖宽）</span>
+    <span class="b">多标签内容区</span><span class="b">离线 · 无外链</span>
+  </div>
+
+  <a class="hero" href="02-activity-bar.html">
+    <span class="tag">完整 demo</span>
+    <h2>打开：文件管理器（活动栏 + 侧边栏）</h2>
+    <p>活动栏三个视图——资源管理器 / 搜索 / 源代码管理；右侧多标签内容区支持代码编辑、Markdown 预览、差异、提交检视、图片、表格、JSON、PDF 与二进制提示。</p>
+    <span class="go">开始体验 →</span>
+  </a>
+
+  <h4 class="sec">文件管理</h4>
+  <div class="grid">
+    <div class="card"><h3>目录树</h3><p>分层展开、目录在前、按文件类型着色图标；每行带 Git 徽标。可新建文件 / 文件夹、重命名、删除（删除有确认框）。</p></div>
+    <div class="card"><h3>右键菜单</h3><p>打开、查看差异、复制相对 / 绝对路径、重命名、用默认应用打开、在文件夹中显示、删除——按文件与目录给不同项。</p></div>
+    <div class="card"><h3>搜索</h3><p>活动栏第二个图标（或 <code>Ctrl+Shift+F</code>）按文件名全项目搜索，点结果自动展开所在目录并打开文件。</p></div>
+    <div class="card"><h3>多文件夹</h3><p>顶栏的文件夹名是切换器：主文件夹 ↔ 文档仓库，各自独立的树与展开状态。</p></div>
+    <div class="card"><h3>多标签</h3><p>可同时打开多个文档，重复打开会定位已有标签；有未保存改动时标签显示脏点，<code>Ctrl+W</code> 关闭。</p></div>
+    <div class="card"><h3>编辑与保存</h3><p>带高亮的可编辑区，<code>Ctrl+S</code> 保存（无改动不写盘）；状态栏实时显示行 / 列。</p></div>
+    <div class="card"><h3>预览</h3><p>Markdown（预览 / 编辑切换，支持表格与代码块）、CSV 分页表格、JSON 折叠树、图片、PDF、二进制说明。</p></div>
+    <div class="card"><h3>忽略规则</h3><p><code>.gitignore</code> 命中的条目淡出显示，侧栏底部说明隐藏了哪些。</p></div>
+  </div>
+
+  <h4 class="sec">Git 管理</h4>
+  <div class="grid">
+    <div class="card"><h3>变更列表</h3><p>已暂存 / 变更 / 未跟踪三组，行首色条 + 等宽字母，右侧 <code>+N −N</code>；悬停出单文件暂存按钮，组头可全部暂存 / 取消。</p></div>
+    <div class="card"><h3>提交</h3><p>侧栏底部提交框，<code>Ctrl/⌘+Enter</code> 提交；提示「在 main 上提交 · N 个文件」，并说明会运行 <code>pre-commit</code> 钩子。</p></div>
+    <div class="card"><h3>差异</h3><p>点变更行打开 diff 标签，可切「未暂存 / 已暂存」，hunk 头带函数名，行级底色与词级高亮。</p></div>
+    <div class="card"><h3>历史</h3><p>提交列表带 SHA、作者、相对时间与 ref 标签（分支 / 远程 / tag），合并提交用空心圆点区分。</p></div>
+    <div class="card"><h3>提交检视</h3><p>点提交进只读页：左侧本次提交的文件，右侧该文件差异，可一键复制 SHA。</p></div>
+    <div class="card"><h3>分支</h3><p>分支列表标出当前分支与领先 / 落后，点击切换。</p></div>
+    <div class="card"><h3>远程同步</h3><p>顶栏 Pull / Fetch / Push 常驻，状态栏显示分支、跟踪目标与 ↑↓ 计数。</p></div>
+    <div class="card"><h3>徽标联动</h3><p>活动栏图标上的数字、树里每行的 M/A/D、状态栏的变更数，都来自同一份状态。</p></div>
+  </div>
+
+  <h4 class="sec">其他布局（同一套功能，不同排布）</h4>
+  <div class="others">
+    <a class="other" href="01-workbench.html"><b>三栏工作台</b><span>文件树 │ 变更导航器 │ 内容</span></a>
+    <a class="other" href="03-graph.html"><b>历史优先</b><span>整行提交图 + 下方分栏详情</span></a>
+    <a class="other" href="04-console.html"><b>底部控制台</b><span>可拖高度的 Git 工作台</span></a>
+  </div>
+
+  <footer>
+    <span>设计说明、交互契约与落到插件里的拆分方式：<code>README.md</code>。</span>
+    <span>全部离线自包含：无 CDN、无外部字体、无网络请求；右上角可切亮 / 暗。</span>
+  </footer>
+</div>
+</body>
+</html>

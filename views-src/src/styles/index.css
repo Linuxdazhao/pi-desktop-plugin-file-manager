@@ -123,42 +123,26 @@ input:focus-visible {
 .fm-icon-button:disabled { opacity: .4; cursor: default; }
 .fm-key-tip { position: fixed; z-index: 100; max-width: min(200px, 95vw); padding: 4px 7px; background: var(--surface-raised); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px; pointer-events: none; font-size: 11px; }
 
-/* Navigation switches mode; document tabs belong to the content they expose. */
-.fm-list-switch { display: flex; align-self: flex-start; max-width: calc(100% - 12px); margin: 7px 6px 2px; padding: 2px; gap: 2px; border-radius: 7px; background: var(--surface-hover); }
-.fm-tab { min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px; margin: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 11.5px; line-height: 1.2; }
+/* One strip for document, diff and commit tabs. */
+.fm-tab { min-width: 0; display: inline-flex; align-items: center; gap: 5px; margin: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 11.5px; line-height: 1.2; }
+.fm-tab > svg { flex: none; }
 .fm-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fm-list-switch .fm-tab { height: 25px; padding: 0 7px; border-radius: 5px; }
 .fm-tab:hover { background: var(--surface-hover); color: var(--fg); }
-.fm-list-switch .fm-tab[aria-selected="true"] { background: var(--surface-raised); color: var(--fg); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
-.fm-document-tabs { display: flex; align-items: stretch; flex: none; min-width: 0; gap: 2px; padding: 4px 4px 0; border-bottom: 1px solid var(--border-strong); background: var(--surface-raised); }
-.fm-document-tabs > .fm-tab, .fm-preview-tab { position: relative; height: 30px; min-width: 0; max-width: 52%; padding: 0 8px; border-radius: 5px 5px 0 0; }
-.fm-document-tabs > .fm-tab[aria-selected="true"], .fm-preview-tab[data-active="true"] { background: var(--bg); color: var(--fg); box-shadow: inset 0 2px var(--secondary); }
-.fm-preview-tab { display: flex; align-items: center; max-width: 75%; padding: 0 2px 0 7px; }
-.fm-preview-tab .fm-tab { height: 100%; padding: 0 2px; }
-.fm-preview-tab[data-active="true"] .fm-tab { color: var(--fg); }
 .fm-tab-detail { flex: none; padding: 1px 4px; border-radius: 3px; background: var(--surface-active); font-size: 10px; color: var(--secondary); }
 .fm-dirty-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--secondary); }
 .fm-tab-close { display: grid; place-items: center; flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
 .fm-tab-close:hover, .fm-tab-close:focus-visible { background: var(--surface-active); color: var(--fg); }
-
-.fm-document-tabs { overflow-x: auto; scrollbar-width: thin; }
-.fm-file-tab { flex: 0 0 auto; display: flex; align-items: center; min-width: 0; max-width: min(240px, 75%); height: 30px; padding: 0 2px 0 7px; border-radius: 5px 5px 0 0; }
-.fm-file-tab .fm-tab { height: 100%; padding: 0 2px; }
-.fm-file-tab[data-active="true"] { background: var(--bg); box-shadow: inset 0 2px var(--secondary); }
-.fm-file-tab[data-active="true"] .fm-tab { color: var(--fg); }
-.fm-file-tab .fm-tab-close { font-size: 16px; }
-.fm-preview-tab { flex: 0 0 auto; }
+.fm-tab-close:disabled { opacity: .45; cursor: default; }
 
 /* Source control occupies the explorer column; only the change list scrolls. */
 .scm-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--fg); font-size: 12px; }
 .scm-controls { padding: 3px 8px 8px; border-bottom: 1px solid var(--border); }
 .scm-controls header { height: 29px; display: flex; align-items: center; gap: 6px; color: var(--secondary); }
 .scm-controls strong { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 550; }
-.scm-compose { display: flex; align-items: flex-end; gap: 3px; padding: 4px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 5px; }
+.scm-compose { display: flex; flex-direction: column; gap: 3px; padding: 4px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 5px; }
 .scm-compose:focus-within { border-color: var(--secondary); }
 .scm-compose textarea { flex: 1; min-width: 0; padding: 2px; border: 0; outline: none; font: inherit; resize: vertical; min-height: 30px; max-height: 100px; color: var(--fg); background: transparent; }
 .scm-compose textarea::placeholder { color: var(--muted); }
-.scm-compose .fm-icon-button:not(:disabled) { background: var(--surface-active); color: var(--fg); }
 .scm-list { flex: 1; min-height: 0; overflow: auto; padding: 3px 4px; }
 .scm-pane footer, .scm-list p { padding: 4px 6px; margin: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .scm-pane footer { border-top: 1px solid var(--border); }
@@ -169,38 +153,44 @@ input:focus-visible {
 .scm-group-toggle:hover, .scm-row:hover, .scm-row:focus-within { background: var(--surface-hover); }
 .scm-group-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
 .scm-count { margin-left: auto; min-width: 17px; padding: 0 4px; border-radius: 8px; text-align: center; background: var(--surface-active); color: var(--secondary); font: 10px/16px var(--mono); }
-.scm-row { display: flex; align-items: center; padding: 0 3px 0 10px; border-radius: 4px; }
+.scm-row { display: flex; flex-wrap: nowrap; align-items: center; min-height: 26px; padding: 0 3px 0 10px; border-radius: 4px; }
 .scm-row[data-selected="true"] { background: var(--surface-active); box-shadow: inset 2px 0 var(--secondary); }
-.scm-file { flex: 1; height: 25px; }
+.scm-file { flex: 1 1 auto; min-width: 0; height: 26px; overflow: hidden; }
 .scm-name, .scm-file small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scm-file small { flex: 0 3 auto; color: var(--muted); font-size: 10.5px; }
-.scm-status { flex: none; width: 16px; text-align: center; font: 600 11px/1 var(--mono); }
+.scm-status { flex: none; width: 16px; color: var(--scm-file-color, var(--muted)); text-align: center; font: 600 11px/1 var(--mono); }
 @media (hover: hover) { .scm-row:not(:hover):not(:focus-within):not([data-selected="true"]) .scm-row-action { opacity: 0; } }
+/* The row action is a fixed square: it must never wrap under the file name. */
+.scm-row .scm-row-action { flex: none; width: 22px; height: 22px; }
+.scm-row .scm-status { flex: none; }
 
-.fm-activity-bar.fm-list-switch { flex: none; align-self: stretch; align-items: center; max-width: none; height: 31px; margin: 0; padding: 0 5px; gap: 2px; border-top: 1px solid var(--border-strong); border-radius: 0; background: var(--surface); }
-.fm-activity-bar .fm-tab { width: 32px; height: 26px; gap: 0; }
-.scm-tabs { display: flex; flex: none; background: var(--surface-raised); border-bottom: 1px solid var(--border-strong); }
-.scm-tabs button { flex: 1; padding: 6px 4px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); cursor: pointer; }
-.scm-tabs button[aria-selected=true] { color: var(--fg); background: var(--surface); border-bottom-color: var(--secondary); }
-.scm-tabs small { font-variant-numeric: tabular-nums; }
+.scm-branches { margin: 0; padding: 2px 4px; list-style: none; }
+.scm-branches li { display: flex; align-items: center; gap: 6px; padding: 5px 7px; min-height: 26px; border-radius: 4px; }
+.scm-branches li[aria-current] { background: var(--surface-active); color: var(--fg); }
+.scm-branches svg { flex: none; color: var(--muted); }
+.scm-branches small { flex: none; margin-inline-start: auto; color: var(--muted); }
+.scm-error[role="alert"] { color: var(--danger); }
 .scm-actions { display: flex; align-items: center; gap: 2px; padding: 2px 6px; color: var(--muted); border-bottom: 1px solid var(--border); }
 .scm-actions > span { flex: 1; font-size: 11px; }
 .scm-controls { flex: none; border-top: 1px solid var(--border-strong); border-bottom: 0; }
 .scm-guide { padding: 14px 10px; color: var(--secondary); overflow-wrap: anywhere; }
 .scm-guide strong { color: var(--fg); }
 .scm-guide p { margin: 6px 0 10px; }
-.scm-primary { padding: 5px 9px; background: var(--fg); color: var(--bg); border: 0; border-radius: 4px; cursor: pointer; }
-.scm-sync { position: relative; }
-.scm-popover { position: absolute; bottom: calc(100% + 3px); right: 0; z-index: 12; min-width: 150px; max-width: min(235px,90vw); width: max-content; padding: 4px; background: var(--surface-raised); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 5px; box-shadow: 0 4px 16px #0003; }
-.scm-popover button { display: block; width: 100%; padding: 4px 7px; border: 0; text-align: left; background: transparent; color: var(--fg); border-radius: 3px; cursor: pointer; }
+.scm-primary { display: inline-flex; align-items: center; gap: 5px; padding: 5px 9px; background: var(--fg); color: var(--bg); border: 0; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.scm-primary:disabled { opacity: .45; cursor: default; }
+.scm-primary > span { opacity: .75; }
+.scm-popover { position: fixed; z-index: 55; width: max-content; min-width: min(176px, calc(100vw - 16px)); max-width: min(300px, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: auto; display: grid; gap: 7px; padding: 10px; background: var(--surface-raised); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: 0 5px 20px #0005; overflow-wrap: anywhere; }
+.scm-popover small, .scm-popover p { margin: 0; color: var(--muted); }
+.scm-popover label { display: grid; gap: 4px; }
+.scm-popover select { min-width: 0; max-width: 100%; padding: 3px; border: 1px solid var(--border-strong); border-radius: 4px; color: var(--fg); background: var(--surface); }
+.scm-popover > div { display: flex; justify-content: flex-end; gap: 4px; }
+.scm-popover button { padding: 4px 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--fg); border-radius: 4px; cursor: pointer; }
 .scm-popover button:hover:not(:disabled) { background: var(--surface-active); }
-.scm-popover button:disabled { color: var(--faint); cursor: default; }
+.scm-popover button:disabled { opacity: .45; cursor: default; }
 .scm-popover button.danger { color: var(--danger); }
-.scm-popover p { margin: 4px; color: var(--muted); white-space: normal; }
-.scm-confirm { display: grid; gap: 6px; padding: 8px; }
-.scm-confirm label { display: grid; gap: 3px; }
-.scm-confirm select { color: var(--fg); background: var(--surface); }
-.scm-confirm > div { display: flex; }
+.scm-segments button svg { flex: none; }
+.scm-segments button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scm-segments .fm-seg-detail { flex: none; background: none; padding: 0; }
 
 /* Static layout, one composited opacity animation per visible placeholder. */
 .fm-skeleton { width: 100%; min-width: 0; padding: 10px 14px; overflow: hidden; contain: layout paint; pointer-events: none; }
@@ -358,7 +348,8 @@ input:focus-visible {
   gap: 6px;
   border: 0;
   border-radius: 6px;
-  padding: 3px 8px 3px 6px;
+  /* 右侧留出滚动条的位置：行尾的 +N/−N 不该被压在滚动条下面。 */
+  padding: 3px 14px 3px 6px;
   background: transparent;
   color: var(--secondary);
   cursor: pointer;
@@ -1499,4 +1490,1102 @@ button.json-row:hover {
     transition: none !important;
     animation: none !important;
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Workbench: activity bar + one swappable sidebar + tabbed content.
+
+   Layout, top to bottom / left to right:
+     .fm-topbar    38px  which folder, remote verbs, display toggles
+     .fm-body      flex  [.fm-rail 46px][.fm-sidebar 220–520][.fm-gutter][.fm-content]
+     .fm-status    23px  branch/upstream on the left, cursor on the right
+
+   Everything below is scoped to the class names this layout owns, so the
+   existing viewer styles (markdown, table, json, image, pdf, sqlite) and the
+   source-control list styles keep working unchanged inside the new shell.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.fm-app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+}
+
+/* ── 顶栏 ─────────────────────────────────────────────────────────────────── */
+
+.fm-topbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.fm-topbar-tools, .fm-file-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+}
+
+.fm-workbench-alert {
+  flex: none;
+  max-height: 24vh;
+  overflow: auto;
+  padding: 6px 10px;
+  color: var(--danger);
+  background: color-mix(in oklab, var(--danger) 12%, var(--bg));
+  overflow-wrap: anywhere;
+}
+
+.fm-brand {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.fm-rootchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 22rem;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.fm-rootchip svg { flex: none; }
+
+button.fm-rootchip:hover,
+button.fm-rootchip:focus-visible {
+  border-color: var(--border);
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.fm-rootchip[data-static="true"] {
+  cursor: default;
+}
+
+.fm-rootchip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-rootchip-hint {
+  flex: none;
+  color: var(--faint);
+  font: 10.5px/1 var(--mono);
+}
+
+.fm-topbar-note {
+  flex: none;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.fm-topbar-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.fm-rail-spacer {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Top-bar remote actions: Pull / Push / Fetch. */
+.scm-inline-sync {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.scm-sync-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 23px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.scm-sync-btn:hover:not(:disabled),
+.scm-sync-btn[aria-expanded="true"] {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.scm-sync-btn:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+/* Ahead/behind on the Pull / Push buttons: the only sync number worth a badge. */
+.scm-sync-count {
+  min-width: 12px;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: var(--surface-active);
+  color: var(--secondary);
+  font: 9.5px/12px var(--mono);
+  text-align: center;
+}
+
+
+/* ── 活动栏 ───────────────────────────────────────────────────────────────── */
+
+.fm-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.fm-rail {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 46px;
+  padding: 5px 0;
+  border-right: 1px solid var(--border-strong);
+  background: color-mix(in oklab, var(--fg) 4%, var(--bg));
+}
+
+.fm-rail-views { display: flex; flex-direction: column; gap: 1px; }
+
+.fm-rail-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.fm-rail-btn:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.fm-rail-btn[aria-selected="true"],
+.fm-rail-btn[aria-pressed="true"] {
+  color: var(--fg);
+}
+
+/* The active marker sits in the rail's own left padding, so it reads as a tab
+   on the boundary between the rail and the sidebar. */
+.fm-rail-btn[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--fg);
+}
+
+.fm-rail-badge {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--git-modified);
+  color: #1a1c1f;
+  font: 700 8.5px/14px var(--mono);
+  text-align: center;
+}
+
+/* ── 侧边栏 ───────────────────────────────────────────────────────────────── */
+
+.fm-sidebar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border-strong);
+  background: var(--surface);
+  container: sidebar / inline-size;
+}
+
+.fm-sidebar[hidden], .fm-view[hidden] { display: none; }
+
+.fm-side-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fm-side-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .07em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.fm-side-actions {
+  display: flex;
+  flex: none;
+  gap: 1px;
+}
+
+.fm-side-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 3px 5px 8px;
+}
+
+/* The source-control panel brings its own scroll container and padding. */
+.fm-side-body-flush {
+  overflow: hidden;
+  padding: 0;
+}
+
+.fm-side-hint {
+  margin: 0;
+  padding: 14px 10px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.fm-side-caption {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 4px 4px 2px;
+  color: var(--secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.fm-side-caption > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-side-caption-actions {
+  display: flex;
+  flex: none;
+  margin-left: auto;
+}
+
+.fm-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  margin: 5px 6px 4px;
+  padding: 0 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+}
+
+.fm-search:focus-within { border-color: var(--secondary); }
+
+.fm-search > svg {
+  flex: none;
+  color: var(--faint);
+}
+
+.fm-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 11px;
+}
+
+.fm-search input::placeholder {
+  color: var(--faint);
+}
+
+.fm-search > button {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.fm-search > button:hover {
+  background: var(--surface-active);
+  color: var(--fg);
+}
+
+.fm-search-results {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 2px 0;
+}
+
+.fm-search-hit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 25px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--secondary);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fm-search-hit:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.fm-search-hit[aria-selected="true"] {
+  background: var(--surface-active);
+  color: var(--fg);
+}
+
+.fm-search-hit-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-search-hit-dir {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--faint);
+  font: 9.5px/1 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-gutter {
+  flex: none;
+  width: 4px;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.fm-gutter:hover, .fm-gutter:focus-visible, .fm-body[data-resizing] .fm-gutter {
+  background: var(--border-strong);
+  outline: none;
+}
+.fm-body[data-resizing] { user-select: none; cursor: col-resize; }
+
+/* ── 内容区 ───────────────────────────────────────────────────────────────── */
+
+.fm-content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  container: content / inline-size;
+}
+
+.fm-document-tabs {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  gap: 1px;
+  min-height: 34px;
+  padding: 4px 6px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  scrollbar-width: thin;
+}
+
+.fm-file-tab {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-width: 0;
+  max-width: min(240px, 85%);
+  height: 29px;
+  padding: 0 2px 0 7px;
+  border-radius: 5px 5px 0 0;
+}
+
+.fm-file-tab .fm-tab {
+  height: 100%;
+  padding: 0 2px;
+}
+
+.fm-file-tab[data-active="true"] {
+  background: var(--bg);
+  box-shadow: inset 0 2px var(--secondary);
+}
+
+.fm-file-tab[data-active="true"] .fm-tab {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.fm-tabs-empty {
+  padding: 0 4px;
+  align-self: center;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.fm-file-tab .fm-tab-close {
+  font-size: 15px;
+}
+
+.fm-content-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 3px 8px;
+  background: var(--surface);
+  font-size: 11.5px;
+}
+
+.fm-file-tools .fm-editor-fact + .fm-editor-fact { margin-inline-start: 3px; }
+
+.fm-bar-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-bar-mono { font-family: var(--mono); }
+
+.fm-seg {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+}
+
+.fm-seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.fm-seg button:hover {
+  color: var(--fg);
+}
+
+.fm-seg button[aria-selected="true"] {
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.fm-seg-detail {
+  color: var(--faint);
+  font: 9px/1 var(--mono);
+}
+
+.fm-tbtn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 23px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--secondary);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fm-tbtn:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.fm-views {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.fm-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+
+.fm-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+}
+
+.fm-empty-glyph {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border-strong);
+  border-radius: 11px;
+  background: var(--surface-raised);
+  color: var(--secondary);
+}
+
+.fm-empty h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.fm-empty p {
+  max-width: 330px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.7;
+}
+
+.fm-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.fm-empty-kbd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+}
+
+.fm-empty-kbd span {
+  padding: 3px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  color: var(--muted);
+  font: 10px/1 var(--mono);
+}
+
+/* ── 编辑器挂载点（头部搬去了内容区顶栏） ─────────────────────────────────── */
+
+.fm-editor-pane {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.fm-editor-path {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--secondary);
+  font: 11px/1.6 var(--mono);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.fm-editor-path:hover {
+  color: var(--fg);
+}
+
+.fm-editor-fact {
+  flex: none;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 差异视图 ─────────────────────────────────────────────────────────────── */
+
+.diff-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.diff-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+  min-height: 30px;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--secondary);
+  font-size: 11px;
+}
+
+.diff-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--secondary);
+  cursor: pointer;
+}
+
+.diff-action:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+.diff-action:disabled { opacity: .45; cursor: default; }
+.diff-base { color: var(--muted); }
+
+@container content (max-width: 340px) {
+  .fm-editor-fact, .fm-seg-detail, .fm-tab-detail, .diff-base { display: none; }
+  .fm-content-bar:has(.fm-seg) { flex-wrap: wrap; }
+  .fm-content-bar:has(.fm-seg) .fm-editor-path { flex-basis: 75%; }
+  .fm-seg button, .scm-seg button { padding-inline: 5px; }
+}
+
+/* Small segmented control shared by the diff scope switch and the panel tabs. */
+.scm-seg {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+}
+
+.scm-seg button {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.scm-seg button[aria-selected="true"] {
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* ── 源代码管理：分段、提交列表、提交详情 ─────────────────────────────────── */
+
+.scm-segments {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin: 5px 6px 4px;
+}
+
+.scm-segments button {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.scm-segments button:hover {
+  background: var(--surface-hover);
+  color: var(--fg);
+}
+
+.scm-segments button[aria-selected="true"] {
+  background: var(--surface-active);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+@container sidebar (max-width: 240px) {
+  .scm-segments button { padding-inline: 3px; }
+  .scm-segments button svg, .scm-segments .fm-seg-detail { display: none; }
+}
+
+.scm-segments .scm-count {
+  /* Inline with the label, not a pill floating to the right of it. */
+  margin-left: 0;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--faint);
+  font: 9.5px/1 var(--mono);
+}
+
+.scm-compose-bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 0 0 4px;
+}
+
+.scm-compose-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scm-commits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scm-commit {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scm-commit:hover {
+  background: var(--surface-hover);
+}
+
+.scm-commit[data-selected="true"] {
+  background: var(--surface-active);
+  box-shadow: inset 2px 0 var(--secondary);
+}
+
+.scm-commit-pip {
+  flex: none;
+  width: 12px;
+  padding-top: 4px;
+  color: var(--git-modified);
+}
+
+.scm-commit-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.scm-commit-subject {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scm-commit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 9.5px;
+}
+
+.scm-commit-meta code {
+  color: var(--secondary);
+  font: 9.5px/1 var(--mono);
+}
+
+.scm-footnote {
+  margin: 6px 0 0;
+  padding: 0 5px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.scm-note {
+  margin: 0;
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.scm-group-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 8px 4px;
+  color: var(--secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+/* A commit opened as a content tab: file column + patch. */
+.scm-commit-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.scm-commit-head {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.scm-commit-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+
+.scm-commit-title strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.scm-commit-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.scm-commit-files {
+  flex: none;
+  width: 250px;
+  max-width: 40%;
+  overflow: auto;
+  border-right: 1px solid var(--border-strong);
+  padding: 0 5px 6px;
+}
+
+.scm-commit-files ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scm-commit-files button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 24px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scm-commit-files button:hover {
+  background: var(--surface-hover);
+}
+
+.scm-commit-files button[data-selected="true"] {
+  background: var(--surface-active);
+  box-shadow: inset 2px 0 var(--secondary);
+}
+
+.scm-commit-files small {
+  flex: 0 3 auto;
+  overflow: hidden;
+  color: var(--faint);
+  font: 9.5px/1 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scm-commit-status {
+  flex: none;
+  width: 14px;
+  color: var(--git-modified);
+  font: 700 10px/1 var(--mono);
+  text-align: center;
+}
+
+.scm-commit-patch {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 8px 12px 20px;
+}
+
+.scm-commit-patch pre {
+  margin: 0;
+  color: var(--secondary);
+  font: 11.5px/1.6 var(--mono);
+  white-space: pre;
+}
+
+/* ── 状态栏 ───────────────────────────────────────────────────────────────── */
+
+.fm-status {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  height: 23px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 10px;
+  border-top: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.fm-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.fm-status-branch, .fm-status-upstream, .fm-status-watch { min-width: 0; overflow: hidden; }
+.fm-status-branch svg { flex: none; }
+.fm-status-branch > span, .fm-status-upstream { overflow: hidden; text-overflow: ellipsis; }
+.fm-status-upstream { display: block; }
+.fm-status-position, .fm-status-kind { flex: none; }
+
+.fm-status-mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Narrow work panels retain the controls, but trade labels for icons. */
+@media (max-width: 760px) {
+  .fm-topbar .fm-brand, .fm-rootchip-hint:empty { display: none; }
+}
+@media (max-width: 520px) {
+  .fm-topbar { gap: 4px; padding-inline: 5px; }
+  .fm-topbar-tools { gap: 0; }
+  .fm-topbar-tools .fm-icon-button { width: 24px; }
+  .scm-sync-btn { padding-inline: 5px; }
+  .scm-sync-label, .scm-sync-count, .fm-rootchip-hint, .fm-status-upstream { display: none; }
+  .fm-status { gap: 6px; padding-inline: 6px; }
 }

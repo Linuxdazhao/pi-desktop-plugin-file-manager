@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Git 模式 · 方案四 底部控制台</title>
+<style>
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #181818; --surface: #181818; --raised: #1f1f1f; --deep: #131315;
+    --hover: color-mix(in oklab, #ffffff 6%, transparent);
+    --active: color-mix(in oklab, #ffffff 10%, transparent);
+    --fg: #ffffff;
+    --secondary: color-mix(in oklab, #ffffff 70%, transparent);
+    --muted: color-mix(in oklab, #ffffff 52%, transparent);
+    --faint: color-mix(in oklab, #ffffff 34%, transparent);
+    --border: color-mix(in oklab, #ffffff 5%, transparent);
+    --border-strong: color-mix(in oklab, #ffffff 14%, transparent);
+    --added: #3fb950; --modified: #d29922; --deleted: #f85149; --renamed: #58a6ff;
+    --wash-add: color-mix(in oklab, #3fb950 13%, transparent);
+    --wash-del: color-mix(in oklab, #f85149 13%, transparent);
+    --tok: color-mix(in oklab, #3fb950 30%, transparent);
+    --shadow: 0 10px 34px #0009;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #fafafa; --surface: #ffffff; --raised: #f3f3f3; --deep: #f0f0f2;
+    --hover: color-mix(in oklab, #1a1c1f 5%, transparent);
+    --active: color-mix(in oklab, #1a1c1f 9%, transparent);
+    --fg: #1a1c1f;
+    --secondary: color-mix(in oklab, #1a1c1f 74%, transparent);
+    --muted: #5d5d5d; --faint: #949494;
+    --border: color-mix(in oklab, #1a1c1f 7%, transparent);
+    --border-strong: color-mix(in oklab, #1a1c1f 14%, transparent);
+    --added: #1a7f37; --modified: #9a6700; --deleted: #cf222e; --renamed: #0969da;
+    --wash-add: color-mix(in oklab, #1a7f37 12%, transparent);
+    --wash-del: color-mix(in oklab, #cf222e 11%, transparent);
+    --tok: color-mix(in oklab, #1a7f37 26%, transparent);
+    --shadow: 0 12px 30px #1a1c1f1f;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #0d0d0f; color: var(--fg); font: 12px/1.45 var(--sans); -webkit-font-smoothing: antialiased; display: grid; place-items: center; padding: 24px; }
+  :root[data-theme="light"] body { background: #e6e6e9; }
+  button, textarea, input { font: inherit; color: inherit; }
+  button:focus-visible, input:focus-visible { outline: 2px solid color-mix(in oklab, var(--fg) 50%, transparent); outline-offset: 1px; }
+
+  .app {
+    position: relative; width: min(1380px, 100%); height: min(860px, calc(100vh - 48px)); min-height: 600px;
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; box-shadow: var(--shadow);
+  }
+  .topbar { flex: none; height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--border-strong); }
+  .brand { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 11.5px; }
+  .crumb { color: var(--faint); font-size: 11px; }
+  .grow { flex: 1; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; height: 23px; padding: 0 8px; border-radius: 5px; border: 1px solid var(--border-strong); background: transparent; color: var(--secondary); font-size: 11px; cursor: pointer; white-space: nowrap; }
+  .chip:hover { background: var(--hover); color: var(--fg); }
+  .chip .num { font: 10px/1 var(--mono); color: var(--fg); }
+  .icon-btn { display: grid; place-items: center; width: 26px; height: 26px; border: 0; border-radius: 5px; background: transparent; color: var(--secondary); cursor: pointer; }
+  .icon-btn:hover { background: var(--hover); color: var(--fg); }
+
+  /* 上半：树 + 内容 */
+  .upper { flex: 1 1 auto; min-height: 120px; display: flex; overflow: hidden; }
+  .tree { flex: none; width: 232px; display: flex; flex-direction: column; border-right: 1px solid var(--border-strong); background: var(--surface); }
+  .pane-head { flex: none; height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 9px; color: var(--faint); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; border-bottom: 1px solid var(--border); }
+  .tree-body { flex: 1; min-height: 0; overflow: auto; padding: 3px 5px 8px; }
+  .trow { display: flex; align-items: center; gap: 5px; width: 100%; height: 23px; padding: 0 5px; border: 0; border-radius: 4px; background: transparent; color: var(--secondary); font-size: 11.5px; cursor: pointer; text-align: left; white-space: nowrap; }
+  .trow:hover { background: var(--hover); color: var(--fg); }
+  .trow[data-sel="true"] { background: var(--active); color: var(--fg); }
+  .trow .car { width: 11px; flex: none; color: var(--faint); display: grid; place-items: center; }
+  .trow .bg { margin-left: auto; font: 700 9px/1 var(--mono); }
+  .d1 { padding-left: 18px; } .d2 { padding-left: 32px; }
+
+  .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .tabs { flex: none; height: 32px; display: flex; gap: 1px; padding: 4px 6px 0; background: var(--raised); border-bottom: 1px solid var(--border-strong); overflow-x: auto; }
+  .tab { display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 5px 5px 0 0; background: transparent; color: var(--muted); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+  .tab:hover { background: var(--hover); color: var(--fg); }
+  .tab[aria-selected="true"] { background: var(--bg); color: var(--fg); font-weight: 600; box-shadow: inset 0 2px 0 var(--secondary); }
+  .tab .x { width: 14px; height: 14px; display: grid; place-items: center; border-radius: 3px; color: var(--faint); }
+  .tab .x:hover { background: var(--active); color: var(--fg); }
+  .view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  .fhead { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px 6px; }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 4px; font: 700 10px/1 var(--mono); }
+  .badge.M { color: var(--modified); background: color-mix(in oklab, var(--modified) 17%, transparent); }
+  .badge.A { color: var(--added); background: color-mix(in oklab, var(--added) 17%, transparent); }
+  .badge.D { color: var(--deleted); background: color-mix(in oklab, var(--deleted) 17%, transparent); }
+  .badge.R { color: var(--renamed); background: color-mix(in oklab, var(--renamed) 17%, transparent); }
+  .fpath { font: 12px/1.35 var(--mono); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .fpath .d { color: var(--faint); }
+  .nums { display: flex; gap: 6px; font: 10.5px/1 var(--mono); }
+  .nums .a { color: var(--added); } .nums .d { color: var(--deleted); }
+  .ftools { margin-left: auto; display: flex; gap: 4px; }
+  .fsub { flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 7px; border-bottom: 1px solid var(--border); }
+  .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 6px; background: var(--hover); }
+  .seg button { border: 0; border-radius: 4px; background: transparent; padding: 3px 8px; color: var(--muted); font-size: 10.5px; cursor: pointer; }
+  .seg button[aria-selected="true"] { background: var(--raised); color: var(--fg); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
+  .meta { color: var(--faint); font-size: 10.5px; }
+  .diff { flex: 1; min-height: 0; overflow: auto; font: 11.5px/1.62 var(--mono); }
+  .hunk { position: sticky; top: 0; display: flex; gap: 8px; padding: 3px 12px; background: var(--raised); border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10.5px; }
+  .hunk .r { color: var(--renamed); font-variant-numeric: tabular-nums; }
+  .hunk .c { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ln { display: flex; min-height: 19px; }
+  .ln .no { flex: none; width: 36px; padding-right: 8px; text-align: right; color: var(--faint); font-size: 10.5px; user-select: none; }
+  .ln .sg { flex: none; width: 13px; text-align: center; color: var(--faint); }
+  .ln .cd { flex: 1; padding-right: 14px; color: var(--secondary); white-space: pre-wrap; word-break: break-word; }
+  .ln.add { background: var(--wash-add); } .ln.add .cd { color: var(--fg); } .ln.add .sg { color: var(--added); }
+  .ln.del { background: var(--wash-del); } .ln.del .sg { color: var(--deleted); }
+  .tok { background: var(--tok); border-radius: 2px; }
+  .k { color: #c678dd; } .s { color: #98c379; } .n { color: #d19a66; } .cm { color: var(--faint); font-style: italic; }
+  :root[data-theme="light"] .k { color: #a626a4; } :root[data-theme="light"] .s { color: #3f8a3a; } :root[data-theme="light"] .n { color: #986801; }
+  .cinfo { flex: none; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--raised); }
+  .cinfo h3 { margin: 0 0 5px; font-size: 12.5px; font-weight: 600; }
+  .cinfo .m { display: flex; gap: 10px; flex-wrap: wrap; font-size: 10.5px; color: var(--faint); }
+  .cinfo .m .mono { font-family: var(--mono); }
+  .empty { flex: 1; display: grid; place-items: center; color: var(--faint); }
+
+  /* 拖拽条 */
+  .drag { flex: none; height: 6px; background: var(--deep); border-top: 1px solid var(--border-strong); cursor: row-resize; display: grid; place-items: center; }
+  .drag i { width: 40px; height: 2px; border-radius: 1px; background: var(--faint); opacity: .45; }
+  .drag:hover i { opacity: 1; }
+
+  /* 控制台 */
+  .console { flex: none; display: flex; flex-direction: column; background: var(--raised); border-top: 1px solid var(--border-strong); }
+  .chead { flex: none; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px 0 6px; border-bottom: 1px solid var(--border); }
+  .chead .tabs2 { display: flex; gap: 2px; }
+  .chead .tabs2 button { border: 0; border-radius: 4px; background: transparent; padding: 4px 9px; color: var(--muted); font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+  .chead .tabs2 button:hover { color: var(--fg); background: var(--hover); }
+  .chead .tabs2 button[aria-selected="true"] { background: var(--active); color: var(--fg); font-weight: 600; }
+  .chead .n { font: 9.5px/1 var(--mono); color: var(--faint); }
+  .chead .sp { flex: 1; }
+  .chead .tog { border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-size: 10.5px; padding: 3px 7px; cursor: pointer; }
+  .chead .tog:hover { background: var(--active); color: var(--fg); }
+
+  .cbody { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+  .ccol { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+  .ccol + .ccol { border-left: 1px solid var(--border-strong); }
+  .chead2 { flex: none; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; color: var(--secondary); font-size: 10.5px; font-weight: 600; border-bottom: 1px solid var(--border); }
+  .chead2 .n { font: 9.5px/1 var(--mono); color: var(--faint); font-weight: 400; }
+  .chead2 .acts { margin-left: auto; display: flex; gap: 2px; }
+  .chead2 .acts button { border: 0; border-radius: 3px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 400; padding: 2px 5px; cursor: pointer; }
+  .chead2 .acts button:hover { background: var(--active); color: var(--fg); }
+  .clist { flex: 1; min-height: 0; overflow: auto; padding: 2px 5px 6px; }
+
+  .crow { position: relative; display: flex; align-items: center; gap: 6px; width: 100%; height: 24px; padding: 0 4px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; text-align: left; }
+  .crow::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2px; border-radius: 2px; }
+  .crow[data-k="M"]::before { background: var(--modified); }
+  .crow[data-k="A"]::before, .crow[data-k="?"]::before { background: var(--added); }
+  .crow[data-k="D"]::before { background: var(--deleted); }
+  .crow[data-k="R"]::before { background: var(--renamed); }
+  .crow:hover { background: var(--hover); }
+  .crow[data-sel="true"] { background: var(--active); }
+  .crow .st { flex: none; width: 14px; text-align: center; font: 700 10px/1 var(--mono); }
+  .crow[data-k="M"] .st { color: var(--modified); } .crow[data-k="A"] .st, .crow[data-k="?"] .st { color: var(--added); }
+  .crow[data-k="D"] .st { color: var(--deleted); } .crow[data-k="R"] .st { color: var(--renamed); }
+  .crow .p { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 4px; overflow: hidden; }
+  .crow .dir { order: -1; color: var(--faint); font: 9.5px/1 var(--mono); white-space: nowrap; overflow: hidden; direction: rtl; unicode-bidi: plaintext; }
+  .crow .nm { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .crow .dl { flex: none; display: flex; gap: 3px; font: 9.5px/1 var(--mono); }
+  .crow .dl .a { color: var(--added); } .crow .dl .d { color: var(--deleted); }
+  .crow .btn { flex: none; width: 17px; height: 17px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: var(--muted); cursor: pointer; opacity: 0; }
+  .crow:hover .btn { opacity: 1; }
+  .crow .btn:hover { background: var(--active); color: var(--fg); }
+  .crow:hover .dl { display: none; }
+  .citem { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 5px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; text-align: left; }
+  .citem:hover { background: var(--hover); }
+  .citem[data-sel="true"] { background: var(--active); }
+  .citem .sha { font: 9.5px/1 var(--mono); color: var(--faint); flex: none; }
+  .citem .s { flex: 1; min-width: 0; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .citem .ref { height: 13px; padding: 0 3px; border-radius: 3px; display: inline-flex; align-items: center; font: 8.5px/1 var(--mono); border: 1px solid var(--border-strong); color: var(--muted); flex: none; }
+  .citem .ref.remote { color: var(--renamed); border-color: color-mix(in oklab, var(--renamed) 40%, transparent); }
+  .citem .ref.tag { color: var(--modified); border-color: color-mix(in oklab, var(--modified) 40%, transparent); }
+  .bitem { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 6px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; text-align: left; }
+  .bitem:hover { background: var(--hover); }
+  .bitem[data-cur="true"] { background: var(--active); }
+  .bitem .nm { font-size: 11px; }
+  .bitem .cur { font: 8.5px/1 var(--mono); padding: 2px 4px; border-radius: 3px; background: var(--active); color: var(--secondary); }
+  .bitem .tr { margin-left: auto; font: 9.5px/1 var(--mono); color: var(--faint); }
+
+  /* 提交区 */
+  .cfoot { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-top: 1px solid var(--border-strong); background: var(--raised); }
+  .cfoot .st { font: 10px/1 var(--mono); color: var(--muted); flex: none; }
+  .cfoot input { flex: 1; min-width: 0; height: 26px; padding: 0 9px; border-radius: 5px; border: 1px solid var(--border-strong); background: var(--bg); outline: none; font-size: 11.5px; }
+  .cfoot input::placeholder { color: var(--faint); }
+  .primary { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 12px; border: 0; border-radius: 5px; background: var(--fg); color: var(--bg); font-size: 11.5px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .primary:disabled { background: var(--active); color: var(--faint); cursor: not-allowed; }
+  .primary .n { font: 10px/1 var(--mono); opacity: .7; }
+
+  .statusbar { flex: none; height: 22px; display: flex; align-items: center; gap: 10px; padding: 0 10px; background: var(--deep); border-top: 1px solid var(--border-strong); color: var(--muted); font-size: 10px; }
+  .statusbar .it { display: inline-flex; align-items: center; gap: 4px; }
+  .statusbar .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .toast { position: absolute; left: 50%; bottom: 30px; transform: translateX(-50%); padding: 6px 12px; border-radius: 6px; background: var(--fg); color: var(--bg); font-size: 11.5px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .16s; }
+  .toast.on { opacity: 1; }
+  .console.collapsed .cbody, .console.collapsed .cfoot { display: none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="topbar">
+    <span class="brand"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 6h6l2 2h10v12H3z"/></svg> 文件管理器</span>
+    <span class="crumb">/ pi-desktop-plugin-file-manager</span>
+    <span class="grow"></span>
+    <button class="chip" id="pullBtn">Pull <span class="num" id="nBehind">0</span></button>
+    <button class="chip" id="pushBtn">Push <span class="num" id="nAhead">3</span></button>
+    <button class="icon-btn" id="themeBtn" title="切换亮/暗">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>
+    </button>
+  </div>
+
+  <div class="upper">
+    <aside class="tree">
+      <div class="pane-head">文件</div>
+      <div class="tree-body" id="tree"></div>
+    </aside>
+    <section class="content">
+      <div class="tabs" id="tabs" role="tablist" aria-label="标签"></div>
+      <div id="views"></div>
+    </section>
+  </div>
+
+  <div class="drag" id="drag" role="separator" aria-orientation="horizontal" aria-label="调整 Git 控制台高度"><i></i></div>
+
+  <section class="console" id="console">
+    <div class="chead">
+      <div class="tabs2" role="tablist" aria-label="Git 视图">
+        <button role="tab" type="button" data-mode="changes" aria-selected="true">变更 <span class="n" id="nChg">9</span></button>
+        <button role="tab" type="button" data-mode="history" aria-selected="false">历史</button>
+        <button role="tab" type="button" data-mode="branches" aria-selected="false">分支 <span class="n">4</span></button>
+      </div>
+      <span class="sp"></span>
+      <button class="tog" id="collapseBtn">收起 ⌄</button>
+    </div>
+    <div class="cbody" id="cbody"></div>
+    <div class="cfoot">
+      <span class="st" id="stagedCount">已暂存 0</span>
+      <input id="msg" placeholder="提交说明（Enter 提交）" aria-label="提交说明">
+      <button class="primary" id="commitBtn" disabled>提交 <span class="n" id="commitN">0</span></button>
+    </div>
+  </section>
+
+  <div class="statusbar">
+    <span class="it"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><circle cx="17" cy="12" r="2"/><path d="M7 7v10M17 12h-4a6 6 0 0 1-6-6"/></svg><span id="sbBranch">main</span></span>
+    <span class="it mono" style="color:var(--faint)" id="sbTrack">origin/main</span>
+    <span class="it mono"><span style="color:var(--added)" id="sbAhead">↑3</span> <span style="color:var(--renamed)" id="sbBehind">↓0</span></span>
+    <span class="grow"></span>
+    <span class="it" id="sbState"></span>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s) { return document.querySelector(s); };
+  var mk = function (t, c, h) { var n = document.createElement(t); if (c) n.className = c; if (h != null) n.innerHTML = h; return n; };
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+  var bits = function (p) { var i = p.lastIndexOf("/"); return i < 0 ? { d: "", n: p } : { d: p.slice(0, i + 1), n: p.slice(i + 1) }; };
+
+  var FILES = {
+    "src/lib/git.ts": { k: "M", add: 12, del: 4, st: 1 },
+    "src/components/RepoBanner.tsx": { k: "A", add: 64, del: 0, st: 1 },
+    "src/components/GitPreview.tsx": { k: "D", add: 0, del: 38, st: 1 },
+    "views-src/src/App.tsx": { k: "M", add: 30, del: 12 },
+    "src/components/GitHistory.tsx": { k: "M", add: 18, del: 9 },
+    "src/lib/rpc.ts": { k: "M", add: 6, del: 2 },
+    "src/components/GitPanel.tsx": { k: "R", add: 44, del: 31 },
+    "CHANGELOG.md": { k: "M", add: 8, del: 1 },
+    "src/styles/index.css": { k: "M", add: 21, del: 6 },
+    "docs/git-redesign/README.md": { k: "?", add: 141, del: 0 },
+    "docs/git-redesign/04-console.html": { k: "?", add: 520, del: 0 }
+  };
+  var COMMITS = [
+    { sha: "e0a71b4", subject: "fix(git): 变更导航器与提交脚注", author: "Tioit", when: "刚刚", refs: ["main"], files: ["src/lib/git.ts", "src/components/GitPanel.tsx", "CHANGELOG.md"] },
+    { sha: "a2c9d31", subject: "feat(editor): 多标签与独立草稿", author: "Tioit", when: "2 小时前", refs: [], files: ["views-src/src/App.tsx", "src/styles/index.css"] },
+    { sha: "7f3e2b8", subject: "fix(pdf): 释放文档与 Worker", author: "Linuxdazhao", when: "昨天", refs: [], files: ["src/lib/rpc.ts"] },
+    { sha: "c81d4a2", subject: "Merge pull request #12 from markdown-images", author: "Tioit", when: "3 天前", refs: ["origin/main"], files: ["src/lib/git.ts", "README.md"] },
+    { sha: "9b2e7f1", subject: "chore(release): v0.13.0", author: "Tioit", when: "3 天前", refs: ["v0.13.0"], files: ["CHANGELOG.md"] }
+  ];
+  var BRANCHES = [
+    { name: "main", ahead: 3, behind: 0 }, { name: "feature/parser", ahead: 1, behind: 0 },
+    { name: "fix/pdf-worker", ahead: 2, behind: 1 }, { name: "sync/file-manager", ahead: 0, behind: 0 }
+  ];
+  var DIFF = [
+    { h: "@@ -130,8 +130,14 @@ export function gitSummaryText()", lines: [
+      ["", 130, "  <span class='k'>const</span> parts: string[] = [];"],
+      ["", 131, "  <span class='k'>if</span> (git.branch) parts.<span class='s'>push</span>(git.branch);"],
+      ["-", 132, "  <span class='k'>const</span> changed = (git.total ?? <span class='n'>0</span>) &gt; <span class='n'>0</span>;"],
+      ["+", null, "  <span class='cm'>// 上游领先/落后与本地变更是两件事，分开画</span>"],
+      ["+", null, "  <span class='k'>const</span> upstream = <span class='tok'>git.ahead ?? <span class='n'>0</span></span>;"],
+      ["+", null, "  <span class='k'>if</span> (upstream) parts.<span class='s'>push</span>(<span class='s'>`↑${upstream}`</span>);"],
+      ["", 133, "  <span class='k'>if</span> (changed) {"]
+    ]},
+    { h: "@@ -188,7 +200,9 @@ function dateLabel()", lines: [
+      ["", 188, "  <span class='k'>const</span> value = <span class='k'>new</span> <span class='s'>Date</span>(date);"],
+      ["-", 189, "    ? value.<span class='s'>toLocaleString</span>(locale === <span class='s'>\"zh\"</span>)"],
+      ["+", null, "    ? <span class='tok'>value.toLocaleString</span>(locale === <span class='s'>\"zh\"</span>)"],
+      ["", 190, "    : date;"]
+    ]}
+  ];
+
+  var S = { mode: "changes", msg: "", branch: "main", ahead: 3, behind: 0, staged: {}, tabs: [], active: null, inspect: null, height: 300 };
+  Object.keys(FILES).forEach(function (p) { if (FILES[p].st) S.staged[p] = true; });
+
+  function toast(m) { var t = $("#toast"); t.textContent = m; t.classList.add("on"); clearTimeout(t._t); t._t = setTimeout(function () { t.classList.remove("on"); }, 1600); }
+  function stagedPaths() { return Object.keys(S.staged).filter(function (p) { return S.staged[p]; }); }
+  function workPaths() { return Object.keys(FILES).filter(function (p) { return !S.staged[p] && FILES[p].k !== "?"; }); }
+  function untrackedPaths() { return Object.keys(FILES).filter(function (p) { return !S.staged[p] && FILES[p].k === "?"; }); }
+
+  /* 文件树 */
+  var TREE = [["src", 0, "M9"], ["components", 1, "M4"], ["lib", 1, "M3"],
+    ["git.ts", 2, "", "src/lib/git.ts"], ["rpc.ts", 2, "", "src/lib/rpc.ts"], ["index.css", 2, "", "src/styles/index.css"],
+    ["App.tsx", 1, "", "views-src/src/App.tsx"], ["docs", 0, "A2"], ["git-redesign", 1, "A2"],
+    ["README.md", 2, "", "docs/git-redesign/README.md"], ["04-console.html", 2, "", "docs/git-redesign/04-console.html"],
+    ["CHANGELOG.md", 0, "", "CHANGELOG.md"], ["manifest.json", 0, ""]];
+  function paintTree() {
+    var host = $("#tree"); host.innerHTML = "";
+    TREE.forEach(function (r) {
+      var row = mk("button", "trow" + (r[1] ? " d" + r[1] : ""));
+      row.type = "button"; row.dataset.sel = String(!!r[3] && S.active === r[3] && !S.inspect);
+      row.innerHTML = '<span class="car">' + (r[3] ? "" : (r[1] ? "▸" : "▾")) + "</span><span>" + esc(r[0]) + "</span>" +
+        (r[2] ? '<span class="bg" style="color:var(--modified)">' + r[2] + "</span>" : "");
+      row.addEventListener("click", function () {
+        if (r[3]) openFile(r[3]); else toast(r[0] + " 目录（演示不展开）");
+      });
+      host.appendChild(row);
+    });
+  }
+
+  /* 控制台 */
+  function paintConsole() {
+    var host = $("#cbody"); host.innerHTML = "";
+    $("#nChg").textContent = workPaths().length + untrackedPaths().length;
+
+    if (S.mode === "changes") {
+      [["已暂存", stagedPaths(), "staged"], ["变更", workPaths(), "work"], ["未跟踪", untrackedPaths(), "work"]].forEach(function (g) {
+        var col = mk("div", "ccol");
+        col.appendChild(mk("div", "chead2", "<span>" + g[0] + '</span><span class="n">' + g[1].length + "</span>" +
+          '<span class="acts"><button type="button">' + (g[2] === "staged" ? "全部 −" : "全部 ＋") + "</button></span>"));
+        var acts = col.querySelector(".acts button");
+        acts.addEventListener("click", function () {
+          if (g[2] === "staged") { S.staged = {}; toast("已取消暂存全部"); }
+          else { Object.keys(FILES).forEach(function (p) { S.staged[p] = true; }); toast("已暂存全部"); }
+          paint();
+        });
+        var list = mk("div", "clist");
+        if (!g[1].length) list.appendChild(mk("p", "meta", "无"));
+        g[1].forEach(function (p) {
+          var f = FILES[p], b = bits(p);
+          var row = mk("button", "crow");
+          row.type = "button"; row.dataset.k = f.k;
+          row.dataset.sel = String(S.active === p && !S.inspect);
+          row.title = p;
+          row.innerHTML = '<span class="st">' + (f.k === "?" ? "??" : f.k) + "</span>" +
+            '<span class="p"><span class="dir">' + esc(b.d || "—") + '</span><span class="nm">' + esc(b.n) + "</span></span>" +
+            '<span class="dl">' + (f.add ? '<span class="a">+' + f.add + "</span>" : "") + (f.del ? '<span class="d">−' + f.del + "</span>" : "") + "</span>" +
+            '<span class="btn">' + (g[2] === "staged" ? "−" : "+") + "</span>";
+          row.addEventListener("click", function (e) {
+            if (e.target.closest(".btn")) {
+              e.stopPropagation();
+              S.staged[p] = g[2] !== "staged";
+              toast((g[2] === "staged" ? "已取消暂存 " : "已暂存 ") + b.n);
+              paint(); return;
+            }
+            openFile(p);
+          });
+          list.appendChild(row);
+        });
+        col.appendChild(list);
+        host.appendChild(col);
+      });
+      return;
+    }
+
+    if (S.mode === "history") {
+      var col1 = mk("div", "ccol");
+      col1.appendChild(mk("div", "chead2", "<span>提交</span><span class='n'>" + COMMITS.length + "</span>"));
+      var l1 = mk("div", "clist");
+      COMMITS.forEach(function (c) {
+        var it = mk("button", "citem");
+        it.type = "button"; it.dataset.sel = String(S.inspect === c.sha);
+        it.innerHTML = '<span class="sha">' + c.sha + '</span><span class="s">' + esc(c.subject) + "</span>" +
+          c.refs.map(function (r) { return '<span class="ref ' + (/origin/.test(r) ? "remote" : /^v/.test(r) ? "tag" : "") + '">' + esc(r) + "</span>"; }).join("");
+        it.addEventListener("click", function () { S.inspect = c.sha; openTab("@" + c.sha); });
+        l1.appendChild(it);
+      });
+      col1.appendChild(l1);
+      host.appendChild(col1);
+
+      var col2 = mk("div", "ccol");
+      var csel = COMMITS.filter(function (x) { return x.sha === S.inspect; })[0];
+      col2.appendChild(mk("div", "chead2", "<span>" + (csel ? "该提交的文件" : "尚未选择提交") + "</span>"));
+      var l2 = mk("div", "clist");
+      if (csel) csel.files.forEach(function (p) {
+        var f = FILES[p] || { k: "M", add: 9, del: 4 }, b = bits(p);
+        var row = mk("button", "crow");
+        row.type = "button"; row.dataset.k = f.k;
+        row.innerHTML = '<span class="st">' + f.k + '</span><span class="p"><span class="dir">' + esc(b.d || "—") + '</span><span class="nm">' + esc(b.n) + "</span></span>" +
+          '<span class="dl"><span class="a">+' + f.add + "</span></span>";
+        row.addEventListener("click", function () { openTab("@" + csel.sha); toast("在内容区查看 " + b.n); });
+        l2.appendChild(row);
+      });
+      col2.appendChild(l2);
+      host.appendChild(col2);
+      return;
+    }
+
+    var cb = mk("div", "ccol");
+    cb.appendChild(mk("div", "chead2", "<span>本地分支</span><span class='n'>" + BRANCHES.length + "</span>"));
+    var lb = mk("div", "clist");
+    BRANCHES.forEach(function (b) {
+      var it = mk("button", "bitem");
+      it.type = "button"; it.dataset.cur = String(b.name === S.branch);
+      it.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--faint);flex:none"><circle cx="7" cy="5" r="2"/><circle cx="7" cy="19" r="2"/><circle cx="17" cy="12" r="2"/><path d="M7 7v10M17 12h-4a6 6 0 0 1-6-6"/></svg>' +
+        '<span class="nm">' + esc(b.name) + "</span>" + (b.name === S.branch ? '<span class="cur">当前</span>' : "") +
+        '<span class="tr">' + (b.ahead ? "↑" + b.ahead : "") + (b.behind ? " ↓" + b.behind : "") + "</span>";
+      it.addEventListener("click", function () { S.branch = b.name; S.ahead = b.ahead; S.behind = b.behind; toast("已切换到 " + b.name); paint(); });
+      lb.appendChild(it);
+    });
+    cb.appendChild(lb);
+    host.appendChild(cb);
+
+    var cb2 = mk("div", "ccol");
+    cb2.appendChild(mk("div", "chead2", "<span>远程</span>"));
+    cb2.appendChild(mk("div", "clist", '<div style="padding:6px 8px;font:10.5px/1.9 var(--mono);color:var(--muted)">origin<br><span style="color:var(--faint)">fetch: origin/main</span><br><span style="color:var(--faint)">push:  origin/main</span></div>'));
+    host.appendChild(cb2);
+  }
+
+  /* 内容区 */
+  function openFile(p) {
+    S.inspect = null;
+    if (S.tabs.indexOf(p) < 0) S.tabs.push(p);
+    S.active = p; paint();
+  }
+  function openTab(t) {
+    if (S.tabs.indexOf(t) < 0) S.tabs.push(t);
+    paint();
+  }
+  function paintTabs() {
+    var host = $("#tabs"); host.innerHTML = "";
+    S.tabs.forEach(function (t) {
+      var isC = t.charAt(0) === "@";
+      var on = isC ? S.inspect === t.slice(1) : (!S.inspect && S.active === t);
+      var b = mk("button", "tab");
+      b.type = "button"; b.setAttribute("aria-selected", String(on));
+      b.innerHTML = (isC ? esc(t.slice(1)) + " · 提交" : esc(bits(t).n)) + '<span class="x">×</span>';
+      b.addEventListener("click", function (e) {
+        if (e.target.closest(".x")) {
+          e.stopPropagation();
+          S.tabs = S.tabs.filter(function (x) { return x !== t; });
+          if (isC) S.inspect = null; else if (S.active === t) S.active = null;
+          paint(); return;
+        }
+        if (isC) S.inspect = t.slice(1); else { S.inspect = null; S.active = t; }
+        paint();
+      });
+      host.appendChild(b);
+    });
+  }
+  function paintViews() {
+    var host = $("#views"); host.innerHTML = "";
+    var view = mk("div", "view");
+    if (S.inspect) {
+      var c = COMMITS.filter(function (x) { return x.sha === S.inspect; })[0];
+      if (!c) { S.inspect = null; return paintViews(); }
+      view.appendChild(mk("div", "cinfo", "<h3>" + esc(c.subject) + "</h3><div class='m'><span>" + esc(c.author) + "</span><span>" + esc(c.when) + "</span><span class='mono'>" + c.sha + "</span><span>" + c.files.length + " 个文件</span></div>"));
+      view.appendChild(mk("div", "fsub", '<span class="meta">与父提交比较 · 只读</span>'));
+      var d = mk("div", "diff");
+      c.files.forEach(function (f, i) {
+        d.appendChild(mk("div", "hunk", '<span class="r">' + esc(f) + "</span>"));
+        DIFF[i % DIFF.length].lines.forEach(function (l) {
+          d.appendChild(mk("div", "ln" + (l[0] === "+" ? " add" : l[0] === "-" ? " del" : ""),
+            '<span class="no">' + (l[1] || "") + '</span><span class="sg">' + (l[0] || " ") + '</span><span class="cd">' + l[2] + "</span>"));
+        });
+      });
+      view.appendChild(d);
+      host.appendChild(view); return;
+    }
+    if (!S.active) { host.appendChild(mk("div", "empty", "从左侧文件树或底部「变更」选择文件")); return; }
+    var m = FILES[S.active] || { k: "M", add: 0, del: 0 }, b = bits(S.active);
+    view.appendChild(mk("div", "fhead", '<span class="badge ' + m.k + '">' + (m.k === "?" ? "??" : m.k) + "</span>" +
+      '<span class="fpath"><span class="d">' + esc(b.d) + "</span>" + esc(b.n) + "</span>" +
+      '<span class="nums">' + (m.add ? '<span class="a">+' + m.add + "</span>" : "") + (m.del ? '<span class="d">−' + m.del + "</span>" : "") + "</span>" +
+      '<span class="ftools"><button class="chip" style="height:22px;font-size:10.5px">换行</button></span>'));
+    view.appendChild(mk("div", "fsub", '<div class="seg" role="tablist"><button role="tab" aria-selected="true" type="button">未暂存</button><button role="tab" aria-selected="false" type="button">已暂存</button></div><span class="meta">暂存区 → 磁盘</span>'));
+    var dd = mk("div", "diff");
+    DIFF.forEach(function (h) {
+      dd.appendChild(mk("div", "hunk", '<span class="r">' + esc(h.h.split(" ")[0]) + '</span><span class="c">' + esc(h.h.replace(/^@@\s*\S+\s*\S+\s*@@\s*/, "")) + "</span>"));
+      h.lines.forEach(function (l) {
+        dd.appendChild(mk("div", "ln" + (l[0] === "+" ? " add" : l[0] === "-" ? " del" : ""),
+          '<span class="no">' + (l[1] || "") + '</span><span class="sg">' + (l[0] || " ") + '</span><span class="cd">' + l[2] + "</span>"));
+      });
+    });
+    view.appendChild(dd);
+    host.appendChild(view);
+    view.querySelectorAll(".seg button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        view.querySelectorAll(".seg button").forEach(function (x) { x.setAttribute("aria-selected", String(x === btn)); });
+      });
+    });
+  }
+
+  function paint() {
+    document.querySelectorAll(".chead [data-mode]").forEach(function (b) {
+      b.setAttribute("aria-selected", String(b.dataset.mode === S.mode));
+    });
+    paintTree(); paintTabs(); paintViews(); paintConsole(); syncFoot();
+    $("#sbBranch").textContent = S.branch;
+    $("#sbTrack").textContent = "origin/" + S.branch;
+    $("#sbAhead").textContent = "↑" + S.ahead;
+    $("#sbBehind").textContent = "↓" + S.behind;
+    $("#nAhead").textContent = S.ahead;
+    $("#nBehind").textContent = S.behind;
+    $("#sbState").textContent = stagedPaths().length + " 已暂存 · " + (workPaths().length + untrackedPaths().length) + " 未暂存 · 控制台高 " + S.height + "px";
+  }
+  function syncFoot() {
+    var n = stagedPaths().length;
+    $("#stagedCount").textContent = "已暂存 " + n;
+    $("#commitN").textContent = n;
+    $("#commitBtn").disabled = !S.msg.trim() || !n;
+  }
+  function doCommit() {
+    if (!S.msg.trim() || !stagedPaths().length) return;
+    var n = stagedPaths().length;
+    COMMITS.unshift({ sha: Math.random().toString(16).slice(2, 9), subject: S.msg, author: "Tioit", when: "刚刚", refs: [S.branch], files: stagedPaths() });
+    S.staged = {}; S.msg = ""; S.ahead += 1;
+    $("#msg").value = "";
+    toast("已提交 " + n + " 个文件");
+    paint();
+  }
+  function setHeight(px) {
+    S.height = Math.max(120, Math.min(Math.round(window.innerHeight * 0.7), px));
+    $("#console").style.height = S.height + "px";
+    paint();
+  }
+
+  /* 拖动 */
+  (function () {
+    var bar = $("#drag"), on = false, startY = 0, startH = 0;
+    bar.addEventListener("pointerdown", function (e) {
+      on = true; startY = e.clientY; startH = $("#console").getBoundingClientRect().height;
+      bar.setPointerCapture(e.pointerId);
+    });
+    bar.addEventListener("pointermove", function (e) { if (on) setHeight(startH - (e.clientY - startY)); });
+    bar.addEventListener("pointerup", function (e) { on = false; bar.releasePointerCapture(e.pointerId); });
+  })();
+
+  document.querySelectorAll(".chead [data-mode]").forEach(function (b) {
+    b.addEventListener("click", function () { S.mode = b.dataset.mode; paint(); });
+  });
+  $("#collapseBtn").addEventListener("click", function () {
+    var c = $("#console"), col = c.classList.toggle("collapsed");
+    $("#collapseBtn").textContent = col ? "展开 ⌃" : "收起 ⌄";
+    paint();
+  });
+  $("#themeBtn").addEventListener("click", function () {
+    var d = document.documentElement; d.dataset.theme = d.dataset.theme === "dark" ? "light" : "dark";
+  });
+  $("#msg").addEventListener("input", function (e) { S.msg = e.target.value; syncFoot(); });
+  $("#msg").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); doCommit(); } });
+  $("#commitBtn").addEventListener("click", doCommit);
+  $("#pushBtn").addEventListener("click", function () { toast(S.ahead ? "已推送 " + S.ahead + " 个提交" : "无需推送"); S.ahead = 0; paint(); });
+  $("#pullBtn").addEventListener("click", function () { toast("已是最新（演示不联网）"); });
+
+  $("#console").style.height = S.height + "px";
+  openFile("src/lib/git.ts");
+})();
+</script>
+</body>
+</html>

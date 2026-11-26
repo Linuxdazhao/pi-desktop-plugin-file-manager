@@ -228,6 +228,14 @@ async function main() {
   const legacyRead = await onPanelInvoke("fm.read", { path: "only-in-alpha.txt" });
   check("单根读取仍然能解析", legacyRead.ok === true);
 
+  console.log("\nWorkbench preferences");
+  await onPanelInvoke("fm.prefs.set", { partial: { wrapLines: false, sidebarWidth: 337.3, tablePageSize: 500 } });
+  const workbenchPrefs = (await onPanelInvoke("fm.hello", {})).prefs;
+  check("wrap, width and table size round-trip", workbenchPrefs.wrapLines === false && workbenchPrefs.sidebarWidth === 337 && workbenchPrefs.tablePageSize === 500);
+  await onPanelInvoke("fm.prefs.set", { partial: { wrapLines: "true", sidebarWidth: 999 } });
+  const clampedPrefs = (await onPanelInvoke("fm.hello", {})).prefs;
+  check("invalid wrap is ignored; width is clamped", clampedPrefs.wrapLines === false && clampedPrefs.sidebarWidth === 520);
+
   console.log("\n9. xlsx 只读预览");
   writeFileSync(join(alpha, "book.xlsx"), xlsxBuffer());
   writeFileSync(join(alpha, "broken.xlsx"), Buffer.from("not a workbook"));

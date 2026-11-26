@@ -2,16 +2,17 @@
  * 变更内容（0.7.0）：把主进程解析好的 unified diff 渲染成带行号的对照视图。
  *
  * 这一层是纯展示：数据是 fm.git.diff 的响应（行类型 + 行号都由 main.js 算好），
- * 这里不再解析任何 diff 文本。段（scope）可能有多个——已暂存与未暂存都改了就
- * 两段都列出来，各自标清楚是哪一段。
+ * 这里不再解析任何 diff 文本。暂存区和工作树都有改动时，从同一份响应里切换显示。
  */
 
-import { Skeleton } from './Skeleton';
+import { Skeleton } from "./Skeleton";
 import type { T } from "../i18n";
 import type { DiffSection, GitDiffResponse } from "../lib/rpc";
 import { formatSize } from "../lib/format";
+import { Segmented, segmentId } from "./Workbench";
+import { GitIcon } from "./GitIcons";
 
-/** 差异视图的加载态。App 持有它，EditorPane 只负责摆出来。 */
+/** 差异视图的加载态，由 GitPreview 持有。 */
 export type DiffViewState =
   | { status: "loading" }
   | { status: "error"; message: string }
@@ -20,84 +21,80 @@ export type DiffViewState =
 type Props = {
   state: DiffViewState;
   t: T;
-  onClose: () => void;
+  onBack?: () => void;
   onRefresh: () => void;
+  refreshing: boolean;
+  /**
+   * Which half of a two-sided change is on screen. The response always carries
+   * every section that exists; picking one is a view decision, not a fetch — a
+   * file staged *and* edited afterwards has both, and flipping between them
+   * must not hit the host again.
+   */
+  scope: "worktree" | "staged";
+  onScope: (scope: "worktree" | "staged") => void;
 };
 
-export function GitDiffView({ state, t, onClose, onRefresh }: Props) {
+export function GitDiffView({ state, t, onBack, onRefresh, refreshing, scope, onScope }: Props) {
+  const response = state.status === "ready" ? state.response : null;
+  // Distinct scopes present in this response, in the order the host produced them.
+  // A file that was staged and then edited again has both, and picking one must
+  // never trigger a refetch: the response already carries both.
+  const scopes = response ? [...new Set(response.sections.map((section) => section.scope))] : [];
+  const activeScope = scopes.includes(scope) ? scope : scopes[0];
+  const switchable = scopes.length > 1;
+  const scopePanel = "fm-diff-scope";
+  const sections = response ? response.sections.filter((section) => section.scope === activeScope) : [];
+  const counts = countLines(sections);
   return (
-    <div className="flex h-full min-h-0 flex-col" style={{ background: "var(--bg)" }}>
-      <div
-        className="flex flex-none items-center gap-2 border-b px-2.5 py-1.5 text-[11.5px]"
-        style={{ borderColor: "var(--border)", background: "var(--surface)" }}
-      >
-        <span className="font-medium">{t("changes")}</span>
-        {state.status === "ready" ? (
+    <div className="diff-pane">
+      <div className="diff-bar">
+        {switchable && <Segmented className="scm-seg" label={t("diffScope")} panelId={scopePanel}
+          value={activeScope} onChange={onScope}
+          options={scopes.map(value => ({ value, label: t(value === "staged" ? "diffScopeStaged" : "diffScopeWorktree") }))} />}
+        {response ? (
           <>
-            <span className="tabular-nums" style={{ color: "var(--git-added)" }}>
-              +{state.response.addedLines}
-            </span>
-            <span className="tabular-nums" style={{ color: "var(--git-deleted)" }}>
-              −{state.response.deletedLines}
-            </span>
-            {state.response.untracked ? (
-              <span style={{ color: "var(--muted)" }}>{t("gitUntracked")}</span>
-            ) : null}
-            {state.response.truncated ? (
-              <span style={{ color: "var(--muted)" }}>{t("gitDiffTruncated")}</span>
-            ) : null}
+            <span className="tabular-nums" style={{ color: "var(--git-added)" }}>+{counts.added}</span>
+            <span className="tabular-nums" style={{ color: "var(--git-deleted)" }}>−{counts.deleted}</span>
+            {activeScope && <span className="diff-base">{t(activeScope === "staged" ? "diffAgainstHead" : "diffAgainstIndex")}</span>}
+            {response.untracked ? <span style={{ color: "var(--muted)" }}>{t("gitUntracked")}</span> : null}
+            {response.truncated ? <span style={{ color: "var(--muted)" }}>{t("gitDiffTruncated")}</span> : null}
           </>
         ) : null}
         <span className="ml-auto flex flex-none items-center gap-1">
-          <button
-            type="button"
-            title={t("refresh")}
-            aria-label={t("refresh")}
-            onClick={onRefresh}
-            className="inline-flex h-6 w-6 items-center justify-center rounded-lg border-0 bg-transparent transition-colors hover:bg-[var(--surface-hover)]"
-            style={{ color: "var(--secondary)" }}
-          >
+          <button type="button" title={t("refresh")} aria-label={t("refresh")} onClick={onRefresh}
+            disabled={refreshing} className="diff-action"><GitIcon name="refresh" size={14} /></button>
+          {onBack && <button type="button" title={t("backToEditor")} aria-label={t("backToEditor")} onClick={onBack} className="diff-action">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M20 11a8 8 0 0 0-14.9-3.9L3 9" />
-              <path d="M3 4v5h5" />
-              <path d="M4 13a8 8 0 0 0 14.9 3.9L21 15" />
-              <path d="M21 20v-5h-5" />
+              <path d="m12 19-7-7 7-7M19 12H5" />
             </svg>
-          </button>
-          <button
-            type="button"
-            title={t("backToEditor")}
-            aria-label={t("backToEditor")}
-            onClick={onClose}
-            className="inline-flex h-6 w-6 items-center justify-center rounded-lg border-0 bg-transparent transition-colors hover:bg-[var(--surface-hover)]"
-            style={{ color: "var(--secondary)" }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="m12 19-7-7 7-7" />
-              <path d="M19 12H5" />
-            </svg>
-          </button>
+          </button>}
         </span>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
-        {state.status === "loading" ? (
-          <Skeleton kind="diff" label={t('loading')} />
-        ) : null}
-
+      <div className="min-h-0 flex-1 overflow-auto" id={switchable ? scopePanel : undefined}
+        role={switchable ? "tabpanel" : undefined} aria-labelledby={switchable ? segmentId(scopePanel, activeScope) : undefined}
+        aria-busy={refreshing || state.status === "loading"}>
+        {state.status === "loading" ? <Skeleton kind="diff" label={t("loading")} /> : null}
         {state.status === "error" ? (
-          <p className="px-3 py-2 text-[11.5px]" role="alert" style={{ color: "var(--danger)" }}>
-            {state.message}
-          </p>
+          <p className="px-3 py-2 text-[11.5px]" role="alert" style={{ color: "var(--danger)" }}>{state.message}</p>
         ) : null}
-
-        {state.status === "ready" ? <DiffBody response={state.response} t={t} /> : null}
+        {state.status === "ready" ? <DiffBody response={state.response} sections={sections} t={t} /> : null}
       </div>
     </div>
   );
 }
 
-function DiffBody({ response, t }: { response: Extract<GitDiffResponse, { ok: true }>; t: T }) {
+function countLines(sections: DiffSection[]) {
+  let added = 0;
+  let deleted = 0;
+  for (const section of sections) for (const hunk of section.hunks) for (const line of hunk.lines) {
+    if (line.type === "add") added += 1;
+    else if (line.type === "del") deleted += 1;
+  }
+  return { added, deleted };
+}
+
+function DiffBody({ response, sections, t }: { response: Extract<GitDiffResponse, { ok: true }>; sections: DiffSection[]; t: T }) {
   if (response.kind === "none") {
     return (
       <p className="px-3 py-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
@@ -115,7 +112,7 @@ function DiffBody({ response, t }: { response: Extract<GitDiffResponse, { ok: tr
       </p>
     );
   }
-  if (response.kind === "binary" || response.sections.every((section) => section.binary)) {
+  if (!sections.length && response.kind === "binary") {
     return (
       <p className="px-3 py-2 text-[11.5px]" style={{ color: "var(--muted)" }}>
         {t("gitDiffBinary")}
@@ -123,9 +120,13 @@ function DiffBody({ response, t }: { response: Extract<GitDiffResponse, { ok: tr
     );
   }
 
+  if (!sections.length) {
+    return <p className="px-3 py-2 text-[11.5px]" style={{ color: "var(--muted)" }}>{t("gitNoChanges")}</p>;
+  }
+
   return (
     <>
-      {response.sections.map((section, index) => (
+      {sections.map((section, index) => (
         <DiffSectionView key={`${section.scope}:${index}`} section={section} t={t} />
       ))}
     </>

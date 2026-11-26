@@ -18,7 +18,7 @@ try {
   const inner = path.join(root, "folder"); await fs.mkdir(inner); await fs.mkdir(path.join(inner, ".git"));
   assert.equal((await rpc("syncAction", { action: "init" })).code, "GIT_LAYOUT"); await fs.rm(inner, { recursive: true });
   assert.deepEqual(await rpc("syncAction", { action: "init", branch: "main" }), { ok: true });
-  assert.deepEqual(await rpc("syncInfo"), { ok: true, state: "repository", branch: "main", remotes: [] });
+  assert.deepEqual(await rpc("syncInfo"), { ok: true, state: "repository", branch: "main", hasHead: false, remotes: [] });
   const run = await backend.runner(root), git = (...args) => run(["-C", root, ...args]);
   await git("config", "user.name", "Fixture"); await git("config", "user.email", "fixture@example.invalid");
   const net = []; let context = "fixture", afterFetch, missing = false;
@@ -42,9 +42,14 @@ try {
   await git("remote", "add", "other", "git@other.invalid:tests/fixture.git");
   await git("remote", "add", "origin", "https://example.invalid/tests/fixture.git");
   await git("config", "branch.main.remote", "origin"); await git("config", "branch.main.merge", "refs/heads/trunk");
+  const notFetched = await info();
+  assert.equal(notFetched.hasHead, true);
+  assert.equal(notFetched.ahead, undefined);
+  assert.equal(notFetched.forceLease, undefined);
   await git("update-ref", "refs/remotes/origin/trunk", first);
   const snapshot = await info();
   assert.deepEqual(snapshot.remotes, ["origin", "other"]); assert.equal(snapshot.upstream, "origin/trunk");
+  assert.deepEqual([snapshot.ahead, snapshot.behind], [0, 0]);
   assert.equal(snapshot.forceLease.expectedOid, first); assert.equal(snapshot.forceLease.branch, "trunk");
   await denied(action("fetch", { remote: "https://test.invalid/a" }), "INVALID_ARGUMENT");
   await denied(action("push", { remote: "absent" }), "GIT_REMOTE");
@@ -64,7 +69,11 @@ try {
   afterFetch = undefined; await action("pull"); assert.equal((await git("rev-parse", "HEAD")).trim(), incoming);
   await git("checkout", "-q", "incoming"); const next = await commit("upstream.txt", "next"); await git("checkout", "-q", "main");
   await commit("local.txt", "local"); await git("update-ref", "refs/remotes/origin/trunk", next);
+  const diverged = await info();
+  assert.deepEqual([diverged.ahead, diverged.behind], [1, 1]);
   await action("pullRebase"); assert.equal((await git("rev-parse", "HEAD^")).trim(), next); assert.equal(await fs.readFile(path.join(root, "local.txt"), "utf8"), "local");
+  const rebased = await info();
+  assert.deepEqual([rebased.ahead, rebased.behind], [1, 0]);
   for (const [key, val] of [["core.sshCommand", "untrusted"], ["credential.helper", "untrusted"], ["include.path", "other"], ["url.file:///tmp/.insteadOf", "https://"], ["remote.origin.pushurl", "file:///tmp/local"], ["remote.origin.vcs", "helper"], ["remote.origin.pushurl", "ext::helper"], ["remote.origin.pushurl", "https://secret@example.invalid/fixture"]]) {
     const n = net.length; await git("config", "--file", path.join(root, ".git/config"), key, val);
     await denied(action("push"), "GIT_CONFIG"); assert.equal(net.length, n);

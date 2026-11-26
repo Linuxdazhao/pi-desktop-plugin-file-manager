@@ -1,0 +1,1464 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件管理器 · 活动栏 + 侧边栏（完整演示）</title>
+<style>
+  /* ── 令牌：与插件 styles/index.css 的宿主镜像变量一致 ── */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #181818; --surface: #181818; --raised: #1f1f1f; --rail: #141414; --deep: #131315;
+    --hover: color-mix(in oklab, #ffffff 6%, transparent);
+    --active: color-mix(in oklab, #ffffff 10%, transparent);
+    --fg: #ffffff;
+    --secondary: color-mix(in oklab, #ffffff 70%, transparent);
+    --muted: color-mix(in oklab, #ffffff 52%, transparent);
+    --faint: color-mix(in oklab, #ffffff 34%, transparent);
+    --border: color-mix(in oklab, #ffffff 5%, transparent);
+    --border-strong: color-mix(in oklab, #ffffff 14%, transparent);
+    --danger: #ff6764;
+    --added: #3fb950; --modified: #d29922; --deleted: #f85149; --renamed: #58a6ff; --conflicted: #bc8cff;
+    --wash-add: color-mix(in oklab, #3fb950 13%, transparent);
+    --wash-del: color-mix(in oklab, #f85149 13%, transparent);
+    --tok: color-mix(in oklab, #3fb950 30%, transparent);
+    --shadow: 0 10px 34px #0009;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #fafafa; --surface: #ffffff; --raised: #f3f3f3; --rail: #f0f0f2; --deep: #ebebee;
+    --hover: color-mix(in oklab, #1a1c1f 5%, transparent);
+    --active: color-mix(in oklab, #1a1c1f 9%, transparent);
+    --fg: #1a1c1f;
+    --secondary: color-mix(in oklab, #1a1c1f 74%, transparent);
+    --muted: #5d5d5d; --faint: #949494;
+    --border: color-mix(in oklab, #1a1c1f 7%, transparent);
+    --border-strong: color-mix(in oklab, #1a1c1f 14%, transparent);
+    --danger: #e02e2a;
+    --added: #1a7f37; --modified: #9a6700; --deleted: #cf222e; --renamed: #0969da; --conflicted: #8250df;
+    --wash-add: color-mix(in oklab, #1a7f37 12%, transparent);
+    --wash-del: color-mix(in oklab, #cf222e 11%, transparent);
+    --tok: color-mix(in oklab, #1a7f37 26%, transparent);
+    --shadow: 0 12px 30px #1a1c1f1f;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: #0d0d0f; color: var(--fg); font: 12px/1.45 var(--sans); -webkit-font-smoothing: antialiased; display: grid; place-items: center; padding: 20px; }
+  :root[data-theme="light"] body { background: #e6e6e9; }
+  button, input, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid color-mix(in oklab, var(--fg) 50%, transparent); outline-offset: 1px; }
+  [hidden] { display: none !important; }
+
+  .app {
+    position: relative; width: min(1500px, 100%); height: min(920px, calc(100vh - 40px)); min-height: 640px;
+    display: flex; flex-direction: column; overflow: hidden;
+    background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px; box-shadow: var(--shadow);
+  }
+
+  /* ── 顶栏 ── */
+  .topbar { flex: none; height: 38px; display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--border-strong); }
+  .brand { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 11.5px; flex: none; }
+  .rootchip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 6px; border-radius: 5px; border: 1px solid transparent; background: transparent; color: var(--secondary); font-size: 11px; }
+  .rootchip:hover { background: var(--hover); border-color: var(--border); color: var(--fg); }
+  .rootchip .mono { font: 10.5px/1 var(--mono); color: var(--faint); }
+  .grow { flex: 1; }
+  .tbtn { display: inline-flex; align-items: center; gap: 5px; height: 23px; padding: 0 8px; border-radius: 5px; border: 1px solid var(--border-strong); background: transparent; color: var(--secondary); font-size: 11px; white-space: nowrap; }
+  .tbtn:hover { background: var(--hover); color: var(--fg); }
+  .tbtn .n { font: 10px/1 var(--mono); color: var(--fg); }
+  .tbtn.primary { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 600; }
+  .tbtn.primary:hover { opacity: .9; }
+  .tbtn:disabled { opacity: .45; cursor: not-allowed; }
+  .ibtn { display: grid; place-items: center; width: 26px; height: 26px; flex: none; border: 0; border-radius: 5px; background: transparent; color: var(--secondary); }
+  .ibtn:hover { background: var(--hover); color: var(--fg); }
+  .ibtn[aria-pressed="true"] { background: var(--active); color: var(--fg); }
+  .sep { width: 1px; height: 17px; background: var(--border-strong); flex: none; }
+
+  /* ── 活动栏 ── */
+  .body { flex: 1; min-height: 0; display: flex; }
+  .rail { flex: none; width: 46px; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 0; background: var(--rail); border-right: 1px solid var(--border-strong); }
+  .rail .rb { position: relative; width: 40px; height: 40px; display: grid; place-items: center; border: 0; border-radius: 6px; background: transparent; color: var(--faint); }
+  .rail .rb:hover { color: var(--fg); background: var(--hover); }
+  .rail .rb[aria-selected="true"] { color: var(--fg); }
+  .rail .rb[aria-selected="true"]::before { content: ""; position: absolute; left: -5px; top: 9px; bottom: 9px; width: 2px; border-radius: 2px; background: var(--fg); }
+  .rail .rb .badge { position: absolute; right: 3px; top: 3px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--modified); color: #1a1c1f; font: 700 8.5px/14px var(--mono); text-align: center; }
+  .rail .sp { flex: 1; }
+
+  /* ── 侧边栏 ── */
+  .side { flex: none; width: 300px; min-width: 200px; display: flex; flex-direction: column; background: var(--surface); border-right: 1px solid var(--border-strong); position: relative; }
+  .side-head { flex: none; height: 32px; display: flex; align-items: center; gap: 4px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--border); }
+  .side-head .t { color: var(--muted); font-size: 10px; letter-spacing: .07em; text-transform: uppercase; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .side-head .acts { display: flex; gap: 1px; flex: none; }
+  .side-head .acts .ibtn { width: 22px; height: 22px; }
+  .side-body { flex: 1; min-height: 0; overflow: auto; padding: 3px 5px 8px; }
+  .side-foot { flex: none; border-top: 1px solid var(--border-strong); padding: 7px; }
+  .gutter { flex: none; width: 4px; cursor: col-resize; background: transparent; }
+  .gutter:hover { background: var(--border-strong); }
+
+  .srch { display: flex; align-items: center; gap: 5px; margin: 5px 6px 4px; padding: 0 7px; height: 24px; border-radius: 5px; border: 1px solid var(--border-strong); background: var(--bg); }
+  .srch input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: 11px; }
+  .srch input::placeholder { color: var(--faint); }
+
+  .trow {
+    display: flex; align-items: center; gap: 4px; width: 100%; height: 23px; padding: 0 5px 0 3px;
+    border: 0; border-radius: 4px; background: transparent; color: var(--secondary); font-size: 11.5px; text-align: left; white-space: nowrap;
+  }
+  .trow:hover { background: var(--hover); color: var(--fg); }
+  .trow[data-sel="true"] { background: var(--active); color: var(--fg); }
+  .trow .car { width: 12px; flex: none; color: var(--faint); display: grid; place-items: center; }
+  .trow .ico { flex: none; width: 14px; display: grid; place-items: center; }
+  .trow .nm { overflow: hidden; text-overflow: ellipsis; }
+  .trow .gb { margin-left: auto; flex: none; font: 700 9.5px/1 var(--mono); }
+  .trow .gb.M { color: var(--modified); } .trow .gb.A, .trow .gb\? { color: var(--added); }
+  .trow .gb.D { color: var(--deleted); } .trow .gb.R { color: var(--renamed); }
+  .trow.ignored { opacity: .45; }
+  .empty-hint { padding: 14px 10px; color: var(--faint); font-size: 11px; line-height: 1.7; }
+
+  /* 变更列表 */
+  .grp { display: flex; align-items: center; gap: 6px; height: 25px; padding: 0 4px; color: var(--secondary); font-size: 10.5px; font-weight: 600; }
+  .grp .n { font: 9.5px/1 var(--mono); color: var(--faint); }
+  .grp .all { margin-left: auto; display: flex; gap: 1px; }
+  .grp .all button { width: 19px; height: 19px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: var(--muted); font-size: 11px; }
+  .grp .all button:hover { background: var(--active); color: var(--fg); }
+  .frow {
+    position: relative; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 25px; padding: 0 4px;
+    border: 0; border-radius: 4px; background: transparent; text-align: left;
+  }
+  .frow::before { content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2px; border-radius: 2px; }
+  .frow[data-k="M"]::before { background: var(--modified); }
+  .frow[data-k="A"]::before, .frow[data-k="?"]::before { background: var(--added); }
+  .frow[data-k="D"]::before { background: var(--deleted); }
+  .frow[data-k="R"]::before { background: var(--renamed); }
+  .frow:hover { background: var(--hover); }
+  .frow[data-sel="true"] { background: var(--active); }
+  .frow .st { flex: none; width: 14px; text-align: center; font: 700 10px/1 var(--mono); }
+  .frow[data-k="M"] .st { color: var(--modified); } .frow[data-k="A"] .st, .frow[data-k="?"] .st { color: var(--added); }
+  .frow[data-k="D"] .st { color: var(--deleted); } .frow[data-k="R"] .st { color: var(--renamed); }
+  .frow .lbl { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 4px; overflow: hidden; }
+  .frow .dir { order: -1; color: var(--faint); font: 9.5px/1 var(--mono); white-space: nowrap; overflow: hidden; direction: rtl; unicode-bidi: plaintext; }
+  .frow .nm { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .frow .dl { flex: none; display: flex; gap: 3px; font: 9.5px/1 var(--mono); }
+  .frow .dl .a { color: var(--added); } .frow .dl .d { color: var(--deleted); }
+  .frow .act { flex: none; width: 17px; height: 17px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: var(--muted); opacity: 0; }
+  .frow:hover .act { opacity: 1; } .frow:hover .dl { display: none; }
+  .frow .act:hover { background: var(--active); color: var(--fg); }
+
+  /* 历史 / 分支 */
+  .cit { display: flex; gap: 6px; width: 100%; padding: 4px 5px; border: 0; border-radius: 4px; background: transparent; text-align: left; }
+  .cit:hover { background: var(--hover); }
+  .cit[data-sel="true"] { background: var(--active); }
+  .cit .g { flex: none; width: 12px; padding-top: 3px; }
+  .cit .g i { display: block; width: 7px; height: 7px; border-radius: 50%; background: var(--modified); }
+  .cit[data-merge="true"] .g i { background: transparent; box-shadow: inset 0 0 0 1.5px var(--renamed); }
+  .cit .t { flex: 1; min-width: 0; }
+  .cit .s { display: block; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cit .m { display: flex; gap: 5px; color: var(--faint); font-size: 9.5px; align-items: center; }
+  .ref { height: 13px; padding: 0 3px; border-radius: 3px; display: inline-flex; align-items: center; font: 8.5px/1 var(--mono); border: 1px solid var(--border-strong); color: var(--muted); flex: none; }
+  .ref.remote { color: var(--renamed); border-color: color-mix(in oklab, var(--renamed) 40%, transparent); }
+  .ref.tag { color: var(--modified); border-color: color-mix(in oklab, var(--modified) 40%, transparent); }
+  .ref.local { color: var(--fg); border-color: color-mix(in oklab, var(--fg) 34%, transparent); }
+  .bit { display: flex; align-items: center; gap: 7px; width: 100%; padding: 5px 6px; border: 0; border-radius: 4px; background: transparent; text-align: left; }
+  .bit:hover { background: var(--hover); }
+  .bit[data-cur="true"] { background: var(--active); }
+  .bit .nm { font-size: 11.5px; }
+  .bit .tag { font: 8.5px/1 var(--mono); padding: 2px 4px; border-radius: 3px; background: var(--active); color: var(--secondary); }
+  .bit .tr { margin-left: auto; font: 9.5px/1 var(--mono); color: var(--faint); }
+
+  /* 提交框 */
+  .composer { border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); overflow: hidden; }
+  .composer:focus-within { border-color: color-mix(in oklab, var(--fg) 34%, transparent); }
+  .composer textarea { display: block; width: 100%; min-height: 52px; max-height: 120px; resize: vertical; border: 0; outline: none; background: transparent; padding: 7px 8px 3px; font: 12px/1.5 var(--sans); }
+  .composer textarea::placeholder { color: var(--faint); }
+  .cbar { display: flex; align-items: center; gap: 5px; padding: 4px 5px 5px 8px; border-top: 1px solid var(--border); }
+  .cbar .h { font-size: 10px; color: var(--faint); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cbar .go { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 9px; border: 0; border-radius: 5px; background: var(--fg); color: var(--bg); font-size: 11.5px; font-weight: 600; }
+  .cbar .go:disabled { background: var(--active); color: var(--faint); cursor: not-allowed; }
+  .cbar .go .n { font: 10px/1 var(--mono); opacity: .7; }
+  .hook { display: flex; gap: 5px; align-items: flex-start; margin-top: 6px; padding: 4px 6px; border-radius: 4px; background: color-mix(in oklab, var(--modified) 14%, transparent); color: var(--modified); font-size: 10px; line-height: 1.5; }
+
+  /* ── 内容区 ── */
+  .content { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+  .tabs { flex: none; height: 33px; display: flex; align-items: stretch; gap: 1px; padding: 4px 6px 0; background: var(--raised); border-bottom: 1px solid var(--border-strong); overflow-x: auto; }
+  .tab { display: inline-flex; align-items: center; gap: 6px; padding: 0 6px 0 9px; border: 0; border-radius: 5px 5px 0 0; background: transparent; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
+  .tab:hover { background: var(--hover); color: var(--fg); }
+  .tab[aria-selected="true"] { background: var(--bg); color: var(--fg); font-weight: 600; box-shadow: inset 0 2px 0 var(--secondary); }
+  .tab .dirty { width: 5px; height: 5px; border-radius: 50%; background: var(--modified); flex: none; }
+  .tab .x { width: 15px; height: 15px; display: grid; place-items: center; border: 0; border-radius: 3px; background: transparent; color: var(--faint); font-size: 12px; }
+  .tab .x:hover { background: var(--active); color: var(--fg); }
+
+  .pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .toolbar2 { flex: none; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-bottom: 1px solid var(--border); }
+  .toolbar2 .path { font: 11.5px/1.3 var(--mono); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toolbar2 .path .d { color: var(--faint); }
+  .toolbar2 .sp { flex: 1; }
+  .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 6px; background: var(--hover); }
+  .seg button { border: 0; border-radius: 4px; background: transparent; padding: 3px 8px; color: var(--muted); font-size: 10.5px; display: inline-flex; gap: 4px; align-items: center; }
+  .seg button:hover { color: var(--fg); }
+  .seg button[aria-selected="true"] { background: var(--raised); color: var(--fg); font-weight: 600; box-shadow: inset 0 0 0 1px var(--border-strong); }
+  .seg .n { font: 9px/1 var(--mono); color: var(--faint); }
+  .meta { color: var(--faint); font-size: 10.5px; }
+  .badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 4px; font: 700 10px/1 var(--mono); flex: none; }
+  .badge.M { color: var(--modified); background: color-mix(in oklab, var(--modified) 17%, transparent); }
+  .badge.A { color: var(--added); background: color-mix(in oklab, var(--added) 17%, transparent); }
+  .badge.D { color: var(--deleted); background: color-mix(in oklab, var(--deleted) 17%, transparent); }
+  .badge.R { color: var(--renamed); background: color-mix(in oklab, var(--renamed) 17%, transparent); }
+  .nums { display: flex; gap: 6px; font: 10.5px/1 var(--mono); }
+  .nums .a { color: var(--added); } .nums .d { color: var(--deleted); }
+
+  /* 代码编辑器 */
+  .editor { flex: 1; min-height: 0; display: flex; overflow: hidden; font: 12px/1.6 var(--mono); }
+  .editwrap { flex: 1; min-width: 0; overflow: auto; display: flex; }
+  .gutter2 { flex: none; padding: 6px 8px 6px 10px; text-align: right; color: var(--faint); font-size: 11px; user-select: none; background: var(--bg); position: sticky; left: 0; }
+  .gutter2 div { height: 19.2px; }
+  .codewrap { flex: 1; min-width: 0; position: relative; }
+  .codewrap pre, .codewrap textarea {
+    margin: 0; padding: 6px 12px; font: 12px/1.6 var(--mono); white-space: pre; tab-size: 2;
+    border: 0; letter-spacing: 0; word-spacing: 0;
+  }
+  .codewrap pre { pointer-events: none; color: var(--secondary); }
+  .codewrap textarea {
+    position: absolute; inset: 0; width: 100%; height: 100%; resize: none; outline: none;
+    background: transparent; color: transparent; caret-color: var(--fg); overflow: hidden;
+  }
+  .codewrap textarea::selection { background: color-mix(in oklab, var(--fg) 24%, transparent); }
+  .k { color: #c678dd; } .s { color: #98c379; } .n { color: #d19a66; } .cm { color: var(--faint); font-style: italic; } .fn { color: #61afef; }
+  :root[data-theme="light"] .k { color: #a626a4; } :root[data-theme="light"] .s { color: #3f8a3a; } :root[data-theme="light"] .n { color: #986801; } :root[data-theme="light"] .fn { color: #0b6fb8; }
+
+  /* diff */
+  .diff { flex: 1; min-height: 0; overflow: auto; font: 11.5px/1.62 var(--mono); }
+  .hunk { position: sticky; top: 0; display: flex; gap: 8px; padding: 3px 12px; background: var(--raised); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10.5px; }
+  .hunk .r { color: var(--renamed); font-variant-numeric: tabular-nums; }
+  .hunk .c { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ln { display: flex; min-height: 19px; }
+  .ln .no { flex: none; width: 38px; padding-right: 8px; text-align: right; color: var(--faint); font-size: 10.5px; user-select: none; }
+  .ln .sg { flex: none; width: 13px; text-align: center; color: var(--faint); }
+  .ln .cd { flex: 1; padding-right: 14px; color: var(--secondary); white-space: pre-wrap; word-break: break-word; }
+  .ln.add { background: var(--wash-add); } .ln.add .cd { color: var(--fg); } .ln.add .sg { color: var(--added); }
+  .ln.del { background: var(--wash-del); } .ln.del .sg { color: var(--deleted); }
+  .tok { background: var(--tok); border-radius: 2px; }
+
+  /* Markdown */
+  .md { flex: 1; min-height: 0; overflow: auto; padding: 20px 26px 40px; }
+  .md h1, .md h2, .md h3 { margin: 1.1em 0 .5em; line-height: 1.3; }
+  .md h1 { font-size: 21px; } .md h2 { font-size: 16px; border-bottom: 1px solid var(--border-strong); padding-bottom: 5px; }
+  .md h3 { font-size: 13.5px; } .md p, .md li { color: var(--secondary); line-height: 1.75; }
+  .md code { font: 11.5px/1.5 var(--mono); background: var(--raised); border: 1px solid var(--border); padding: 1px 5px; border-radius: 4px; }
+  .md pre { background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; overflow: auto; }
+  .md pre code { background: none; border: 0; padding: 0; }
+  .md table { border-collapse: collapse; margin: 12px 0; font-size: 11.5px; }
+  .md th, .md td { border: 1px solid var(--border-strong); padding: 5px 10px; text-align: left; }
+  .md th { background: var(--raised); font-weight: 600; }
+  .md blockquote { margin: 12px 0; padding: 4px 14px; border-left: 3px solid var(--border-strong); color: var(--muted); }
+  .md a { color: var(--renamed); }
+
+  /* 图片 / 二进制 */
+  .stage { flex: 1; min-height: 0; display: grid; place-items: center; background: repeating-conic-gradient(var(--raised) 0% 25%, transparent 0% 50%) 50%/16px 16px; }
+  .stagebox { text-align: center; display: grid; gap: 8px; justify-items: center; }
+  .stagebox .cap { font: 10.5px/1.6 var(--mono); color: var(--muted); background: var(--bg); padding: 4px 9px; border-radius: 5px; border: 1px solid var(--border-strong); }
+
+  /* CSV 表格 */
+  .tablewrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .tableview { flex: 1; min-height: 0; overflow: auto; }
+  .tableview table { border-collapse: collapse; font: 11.5px/1.5 var(--mono); width: 100%; }
+  .tableview th, .tableview td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; white-space: nowrap; }
+  .tableview th { position: sticky; top: 0; background: var(--raised); font-weight: 600; z-index: 1; }
+  .tableview th.rn, .tableview td.rn { color: var(--faint); text-align: right; width: 42px; user-select: none; }
+  .tableview td.num { text-align: right; }
+  .tableview tbody tr:hover { background: var(--hover); }
+  .pager { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-top: 1px solid var(--border-strong); font-size: 10.5px; color: var(--muted); }
+  .pager .pg { margin-left: auto; display: flex; gap: 2px; }
+  .pager .pg button { width: 22px; height: 21px; border: 1px solid var(--border-strong); border-radius: 4px; background: transparent; color: var(--secondary); font-size: 10px; }
+  .pager .pg button:hover:not(:disabled) { background: var(--hover); color: var(--fg); }
+  .pager .pg button:disabled { opacity: .4; }
+
+  /* JSON 树 */
+  .jt { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; font: 11.5px/1.75 var(--mono); }
+  .jt .jn { color: var(--fg); }
+  .jt .jk { color: #e06c75; } :root[data-theme="light"] .jt .jk { color: #e45649; }
+  .jt .js { color: #98c379; } :root[data-theme="light"] .jt .js { color: #50a14f; }
+  .jt .jnum { color: #d19a66; } :root[data-theme="light"] .jt .jnum { color: #986801; }
+  .jt .jl { color: #c678dd; } :root[data-theme="light"] .jt .jl { color: #a626a4; }
+  .jt .row2 { display: flex; gap: 5px; align-items: baseline; }
+  .jt .tg { width: 12px; color: var(--faint); cursor: pointer; user-select: none; }
+  .jt .kids { margin-left: 14px; border-left: 1px dashed var(--border-strong); padding-left: 8px; }
+  .jt .count { color: var(--faint); font-size: 10px; }
+
+  /* 空状态 */
+  .empty { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 24px; }
+  .empty .glyph { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 11px; background: var(--raised); border: 1px solid var(--border-strong); color: var(--secondary); }
+  .empty h3 { margin: 0; font-size: 13px; }
+  .empty p { margin: 0; max-width: 330px; color: var(--muted); font-size: 11.5px; line-height: 1.7; }
+  .empty .acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-top: 2px; }
+  .empty .kbd { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+  .empty .kbd span { font: 10px/1 var(--mono); padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border-strong); color: var(--muted); }
+
+  /* 状态栏 */
+  .statusbar { flex: none; height: 23px; display: flex; align-items: center; gap: 10px; padding: 0 10px; background: var(--raised); border-top: 1px solid var(--border-strong); color: var(--muted); font-size: 10px; }
+  .statusbar .it { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .statusbar .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .statusbar .ok { color: var(--added); }
+
+  /* 右键菜单 */
+  .menu {
+    position: fixed; z-index: 60; min-width: 196px; max-width: 290px; padding: 4px;
+    background: var(--raised); border: 1px solid var(--border-strong); border-radius: 7px; box-shadow: 0 12px 34px #0007;
+  }
+  .menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--fg); font-size: 11.5px; text-align: left; }
+  .menu button:hover { background: var(--active); }
+  .menu button.danger { color: var(--danger); }
+  .menu button .sc { margin-left: auto; font: 9.5px/1 var(--mono); color: var(--faint); }
+  .menu hr { border: 0; border-top: 1px solid var(--border-strong); margin: 4px 2px; }
+
+  /* 模态框 */
+  .modal { position: absolute; inset: 0; z-index: 70; display: grid; place-items: center; background: #0007; }
+  .modal .box { width: min(440px, 90%); background: var(--raised); border: 1px solid var(--border-strong); border-radius: 9px; padding: 16px; box-shadow: var(--shadow); }
+  .modal h3 { margin: 0 0 6px; font-size: 13px; }
+  .modal p { margin: 0 0 12px; color: var(--muted); font-size: 11.5px; line-height: 1.6; }
+  .modal input { width: 100%; height: 28px; padding: 0 9px; border-radius: 5px; border: 1px solid var(--border-strong); background: var(--bg); outline: none; font-size: 12px; margin-bottom: 12px; }
+  .modal .row3 { display: flex; gap: 7px; justify-content: flex-end; }
+  .modal .row3 button { height: 26px; padding: 0 12px; border-radius: 5px; border: 1px solid var(--border-strong); background: transparent; color: var(--secondary); font-size: 11.5px; }
+  .modal .row3 button.pri { background: var(--fg); color: var(--bg); border-color: transparent; font-weight: 600; }
+  .modal .row3 button.dng { background: var(--danger); color: #fff; border-color: transparent; font-weight: 600; }
+
+  .toast { position: absolute; left: 50%; bottom: 34px; transform: translateX(-50%); padding: 6px 13px; border-radius: 6px; background: var(--fg); color: var(--bg); font-size: 11.5px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .16s; max-width: 70%; text-align: center; z-index: 80; }
+  .toast.on { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <!-- 顶栏 -->
+  <div class="topbar">
+    <span class="brand"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 6h6l2 2h10v12H3z"/></svg> 文件管理器</span>
+    <button class="rootchip" id="rootChip" title="切换项目文件夹">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h6l2 2h10v12H3z"/></svg>
+      <span id="rootName">file-manager</span><span class="mono" id="rootSub">主文件夹</span>
+      <svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="m4 6 4 4 4-4"/></svg>
+    </button>
+    <span class="sep"></span>
+    <button class="tbtn" id="syncPull" title="Pull（仅快进）">Pull <span class="n" id="nBehind">0</span></button>
+    <button class="tbtn" id="syncPush" title="Push 到 origin">Push <span class="n" id="nAhead">3</span></button>
+    <button class="tbtn" id="syncFetch" title="Fetch">Fetch</button>
+    <span class="grow"></span>
+    <button class="ibtn" id="wrapBtn" title="自动换行" aria-pressed="false" aria-label="切换自动换行">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h16M4 12h11a3 3 0 1 1 0 6h-3l2-2m-2 2 2 2M4 18h4"/></svg>
+    </button>
+    <button class="ibtn" id="themeBtn" title="切换亮/暗" aria-label="切换亮色或暗色主题">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>
+    </button>
+  </div>
+
+  <div class="body">
+    <!-- 活动栏 -->
+    <nav class="rail" role="tablist" aria-label="视图">
+      <button class="rb" role="tab" type="button" data-view="files" aria-selected="true" title="资源管理器 (Ctrl+Shift+E)">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h6l2 2h10v12H3z"/></svg>
+      </button>
+      <button class="rb" role="tab" type="button" data-view="search" aria-selected="false" title="搜索 (Ctrl+Shift+F)">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+      </button>
+      <button class="rb" role="tab" type="button" data-view="git" aria-selected="false" title="源代码管理 (Ctrl+Shift+G)">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="9" r="2.2"/><path d="M6 8.2v7.6M18 11.2c0 3-4 3.4-6 4"/></svg>
+        <span class="badge" id="railBadge">9</span>
+      </button>
+      <span class="sp"></span>
+      <button class="rb" role="tab" type="button" id="railTheme" title="切换亮/暗">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z"/></svg>
+      </button>
+      <button class="rb" role="tab" type="button" id="railHelp" title="快捷键与说明">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.6 2.6 0 1 1 3.4 2.5c-.6.2-.9.8-.9 1.4v.4M12 17v.2"/></svg>
+      </button>
+    </nav>
+
+    <!-- 侧边栏 -->
+    <aside class="side" id="side">
+      <div class="side-head" id="sideHead"></div>
+      <div class="side-body" id="sideBody"></div>
+      <div class="side-foot" id="sideFoot"></div>
+    </aside>
+    <div class="gutter" id="gutter" role="separator" aria-orientation="vertical" aria-label="调整侧边栏宽度"></div>
+
+    <!-- 内容区 -->
+    <section class="content">
+      <div class="tabs" id="tabs" role="tablist" aria-label="打开的文档"></div>
+      <div id="views" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>
+    </section>
+  </div>
+
+  <div class="statusbar">
+    <span class="it"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="9" r="2.2"/><path d="M6 8.2v7.6M18 11.2c0 3-4 3.4-6 4"/></svg><span id="sbBranch">main</span></span>
+    <span class="it mono" style="color:var(--faint)" id="sbTrack">origin/main</span>
+    <span class="it mono"><span style="color:var(--added)" id="sbAhead">↑3</span> <span style="color:var(--deleted)">↓</span><span id="sbBehind">0</span></span>
+    <span class="it" id="sbWatch"><span class="ok">●</span> 监听中</span>
+    <span class="grow"></span>
+    <span class="it mono" id="sbPos">—</span>
+    <span class="it" id="sbKind"></span>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s) { return document.querySelector(s); };
+  var app = $("#app");
+  var el = function (t, c, h) { var n = document.createElement(t); if (c) n.className = c; if (h != null) n.innerHTML = h; return n; };
+  var esc = function (s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+  var bits = function (p) { var i = p.lastIndexOf("/"); return i < 0 ? { d: "", n: p } : { d: p.slice(0, i + 1), n: p.slice(i + 1) }; };
+  var ext = function (p) { var b = bits(p).n; var i = b.lastIndexOf("."); return i < 0 ? "" : b.slice(i + 1).toLowerCase(); };
+  var base = function (p) { return bits(p).n; };
+
+  /* ══════════ 数据模型 ══════════ */
+  var ROOTS = [
+    { id: "main", name: "pi-desktop-plugin-file-manager", label: "主文件夹" },
+    { id: "docs", name: "pi-plugin-docs", label: "文档仓库" }
+  ];
+  var TREE = {
+    "": [["src", "dir"], ["docs", "dir"], ["views-src", "dir"], ["scripts", "dir"], ["tests", "dir"], ["README.md", "file"], ["CHANGELOG.md", "file"], ["package.json", "file"], ["manifest.json", "file"], ["main.js", "file"], [".gitignore", "file"], [".env.example", "file"], ["logo.png", "file"], ["releases.zip", "file"], ["data.csv", "file"]],
+    "src": [["lib", "dir"], ["components", "dir"], ["styles", "dir"], ["i18n.ts", "file"]],
+    "src/lib": [["git.ts", "file"], ["rpc.ts", "file"], ["format.ts", "file"], ["roots.ts", "file"], ["settings.json", "file"]],
+    "src/components": [["GitPanel.tsx", "file"], ["GitHistory.tsx", "file"], ["GitPreview.tsx", "file"], ["EditorPane.tsx", "file"], ["Tree.tsx", "file"], ["RepoBanner.tsx", "file"]],
+    "src/styles": [["index.css", "file"], ["pdf.css", "file"]],
+    "docs": [["open-call-architecture.html", "file"], ["git-redesign", "dir"]],
+    "docs/git-redesign": [["README.md", "file"], ["activity-bar.html", "file"]],
+    "views-src": [["index.html", "file"], ["App.tsx", "file"], ["main.tsx", "file"]],
+    "scripts": [["verify-git.mjs", "file"], ["verify-roots.mjs", "file"]],
+    "tests": [["smoke.cjs", "file"]]
+  };
+  var DOCS_TREE = { "": [["guide", "dir"], ["README.md", "file"], ["api.json", "file"]], "guide": [["install.md", "file"], ["usage.md", "file"]] };
+
+  /* Git 状态：路径 → kind / +N / −N / staged */
+  var GIT = {
+    "src/lib/git.ts": { k: "M", a: 12, d: 4, staged: true },
+    "src/components/RepoBanner.tsx": { k: "A", a: 64, d: 0, staged: true },
+    "src/components/GitPreview.tsx": { k: "D", a: 0, d: 38, staged: true },
+    "views-src/App.tsx": { k: "M", a: 30, d: 12 },
+    "src/components/GitHistory.tsx": { k: "M", a: 18, d: 9 },
+    "src/lib/rpc.ts": { k: "M", a: 6, d: 2 },
+    "src/components/GitPanel.tsx": { k: "R", a: 44, d: 31 },
+    "CHANGELOG.md": { k: "M", a: 8, d: 1 },
+    "src/styles/index.css": { k: "M", a: 21, d: 6 },
+    "docs/git-redesign/README.md": { k: "?", a: 141, d: 0 },
+    "docs/git-redesign/activity-bar.html": { k: "?", a: 520, d: 0 }
+  };
+  var BRANCHES = [
+    { name: "main", ahead: 3, behind: 0, tip: "e0a71b4" },
+    { name: "feature/activity-bar", ahead: 1, behind: 0, tip: "7f3e2b8" },
+    { name: "fix/pdf-worker", ahead: 2, behind: 1, tip: "a2c9d31" },
+    { name: "sync/remote-roots", ahead: 0, behind: 0, tip: "c81d4a2" }
+  ];
+  var COMMITS = [
+    { sha: "e0a71b4", subject: "feat(ui): 活动栏 + 单侧栏布局", author: "Tioit", when: "刚刚", refs: ["main"], merge: false, un: true, files: ["src/lib/git.ts", "src/components/GitPanel.tsx", "CHANGELOG.md"] },
+    { sha: "a2c9d31", subject: "feat(editor): 多标签与独立草稿", author: "Tioit", when: "2 小时前", refs: [], merge: false, un: true, files: ["views-src/App.tsx", "src/styles/index.css"] },
+    { sha: "7f3e2b8", subject: "fix(pdf): 释放文档与 Worker", author: "Linuxdazhao", when: "昨天", refs: [], merge: false, un: true, files: ["src/lib/rpc.ts"] },
+    { sha: "c81d4a2", subject: "Merge pull request #12 from markdown-images", author: "Tioit", when: "3 天前", refs: ["origin/main"], merge: true, un: false, files: ["src/lib/git.ts", "README.md"] },
+    { sha: "9b2e7f1", subject: "chore(release): v0.13.0", author: "Tioit", when: "3 天前", refs: ["v0.13.0"], merge: false, un: false, files: ["CHANGELOG.md"] },
+    { sha: "0d4f9c6", subject: "feat(git): 状态徽标与差异预览", author: "Tioit", when: "4 天前", refs: [], merge: false, un: false, files: ["src/lib/git.ts", "src/components/GitHistory.tsx"] }
+  ];
+  var IGNORED = ["node_modules", "dist", ".DS_Store"];
+
+  /* 文件内容（演示：每个可打开文件的源码 / 数据） */
+  var CONTENT = {
+    "src/lib/git.ts": "import { parentOf } from \"./format\";\nimport type { GitEntryStatus, GitStatusKind } from \"./rpc\";\n\n/** 徽标字母：与 git 那套心智模型一致（M/A/D/R/U） */\nconst GLYPH: Record<GitStatusKind, string> = {\n  added: \"A\",\n  modified: \"M\",\n  deleted: \"D\",\n  renamed: \"R\",\n  conflicted: \"U\",\n  typechange: \"T\",\n};\n\nexport function gitGlyph(status: GitStatusKind): string {\n  return GLYPH[status] ?? \"?\";\n}\n\n/** 一行的状态说明：状态名 + 暂存 / 未跟踪 + 增删行数 */\nexport function gitTitle(git: GitEntryStatus, t: T): string {\n  const parts = [t(STATUS_KEY[git.status])];\n  if (git.untracked) parts.push(t(\"gitUntracked\"));\n  else if (git.staged) parts.push(t(\"gitStaged\"));\n  return parts.join(\" · \");\n}\n",
+    "src/lib/rpc.ts": "export type GitStatusKind =\n  | \"added\" | \"modified\" | \"deleted\" | \"renamed\" | \"conflicted\" | \"typechange\";\n\nexport type DiffSection = {\n  scope: \"worktree\" | \"staged\";\n  binary: boolean;\n  meta: string[];\n  hunks: { header: string; lines: DiffLine[] }[];\n  truncated: boolean;\n};\n\nexport type Failure = { ok: false; code: string; message: string };\n",
+    "src/lib/format.ts": "export function baseNameOf(path: string): string {\n  const i = path.lastIndexOf(\"/\");\n  return i < 0 ? path : path.slice(i + 1);\n}\n\nexport function parentOf(path: string): string {\n  const i = path.lastIndexOf(\"/\");\n  return i < 0 ? \"\" : path.slice(0, i);\n}\n\nexport function formatSize(bytes: number): string {\n  if (bytes < 1024) return bytes + \" B\";\n  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + \" KB\";\n  return (bytes / 1048576).toFixed(1) + \" MB\";\n}\n",
+    "src/components/GitPanel.tsx": "export function GitPanel(props: Props) {\n  return <Changes key={JSON.stringify([props.workspacePath])} {...props} />;\n}\n\nfunction Changes({ locale, rootPath, active, refreshKey }: Props) {\n  const t = makeT(locale);\n  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);\n  const [tab, setTab] = useState<\"changes\" | \"history\">(\"changes\");\n  return (\n    <section className=\"scm-pane\" aria-label={t(\"gitChangesPanel\")}>\n      <ChangesList entries={snapshot?.entries ?? []} />\n    </section>\n  );\n}\n",
+    "src/components/GitHistory.tsx": "export function GitHistory({ locale, onInspect }: HistoryProps) {\n  const { data, error, refresh } = useHistoryRequest<History>(\"fm.git.history\", {});\n  if (error) return <p role=\"alert\">{failure(error, locale)}</p>;\n  return <ul>{data?.commits.map((c) => (\n    <li key={c.oid}>{c.oid.slice(0, 7)} {c.subject}</li>\n  ))}</ul>;\n}\n",
+    "src/components/EditorPane.tsx": "export function EditorPane({ file, dirty, onSave }: Props) {\n  const ref = useRef<HTMLDivElement>(null);\n  useEffect(() => {\n    const view = new EditorView({ parent: ref.current, state });\n    return () => view.destroy();\n  }, []);\n  return <div ref={ref} className=\"h-full min-h-0 flex-1\" />;\n}\n",
+    "src/components/RepoBanner.tsx": "export function RepoBanner({ state }: Props) {\n  if (state.kind === \"clean\") return null;\n  return (\n    <section role=\"status\" data-kind={state.kind}>\n      {state.kind === \"merge\" ? \"正在合并\" : \"正在变基\"}\n      <Actions steps={state.steps} />\n    </section>\n  );\n}\n",
+    "views-src/App.tsx": "export default function App() {\n  const [openFile, setOpenFile] = useState<FileEntry | null>(null);\n  const [gitOpen, setGitOpen] = useState(false);\n  return (\n    <div className=\"flex h-full min-h-0\">\n      <aside className={gitOpen ? \"hidden\" : \"flex-1\"}>\n        <Tree onOpen={setOpenFile} />\n      </aside>\n      <EditorPane file={openFile} />\n    </div>\n  );\n}\n",
+    "views-src/index.html": "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"UTF-8\" />\n    <title>File Manager</title>\n    <script src=\"./assets/index.js\" defer><\/script>\n  </head>\n  <body>\n    <div id=\"root\"><\/div>\n  </body>\n</html>\n",
+    "README.md": "# 文件管理器\n\n浏览、预览与编辑项目文件，并在同一面板里完成 Git 管理。\n\n## 功能\n\n- **完整目录树**：懒加载、可按层展开、目录在前，每行按文件类型显示图标与 Git 徽标。\n- **多文件标签**：右侧可同时打开多个文档，同一路径再次打开会定位已有标签。\n- **代码高亮编辑**：`Ctrl/Cmd+S` 保存；没有改动时不写盘。\n- **Git 管理**：变更分组、暂存、提交、提交图与提交详情、分支切换、远程同步。\n- **多种预览**：Markdown、图片、CSV 表格、JSON 折叠树、PDF、音视频。\n\n## 快捷键\n\n| 按键 | 动作 |\n| --- | --- |\n| `Ctrl+Shift+E` | 资源管理器 |\n| `Ctrl+Shift+F` | 搜索 |\n| `Ctrl+Shift+G` | 源代码管理 |\n| `Ctrl+S` | 保存当前文件 |\n| `Ctrl+W` | 关闭当前标签 |\n",
+    "CHANGELOG.md": "# Changelog\n\n## 0.13.0\n\n- 首次加载显示骨架屏，刷新时保留已有内容。\n- 文件查看与编辑支持多标签、独立草稿。\n\n## 0.12.0\n\n- 支持 SSH 工作区（只读）。\n",
+    "docs/open-call-architecture.html": "<!doctype html>\n<html><body><h1>Open Call 架构</h1></body></html>\n",
+    "docs/git-redesign/README.md": "# Git 模式 · 活动栏布局\n\n- 44px 活动栏：资源管理器 / 搜索 / 源代码管理。\n- 单侧栏 300px，内容区拿到最大宽度。\n",
+    "scripts/verify-git.mjs": "import assert from \"node:assert\";\nimport { parseStatus } from \"../src/lib/git.js\";\n\nconst out = parseStatus(\"M  src/a.ts\\n M src/b.ts\\n?? c.ts\\n\");\nassert.equal(out.length, 3);\nconsole.log(\"git status parsing ok\");\n",
+    "tests/smoke.cjs": "const { test } = require(\"node:test\");\ntest(\"smoke\", () => { });\n",
+    ".gitignore": "node_modules/\ndist/\n.DS_Store\n.env\n",
+    ".env.example": "PI_API_BASE=https://example.com\nPI_LOG_LEVEL=info\n",
+    "manifest.json": "{\n  \"schemaVersion\": 1,\n  \"id\": \"pi.file-manager\",\n  \"name\": \"File Manager\",\n  \"version\": \"0.13.0\",\n  \"main\": \"main.js\",\n  \"permissions\": [\"ui.view\", \"fs.read\"],\n  \"engines\": { \"piDesktop\": \">=0.9.0\" }\n}\n",
+    "package.json": "{\n  \"name\": \"pi-desktop-plugin-file-manager\",\n  \"version\": \"0.13.0\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"vite build\",\n    \"test\": \"node --test\"\n  },\n  \"devDependencies\": { \"vite\": \"^5.0.0\" }\n}\n",
+    "src/lib/settings.json": "{\n  \"editor\": { \"tabSize\": 2, \"wordWrap\": false, \"theme\": \"host\" },\n  \"tree\": { \"showIgnored\": false, \"sortBy\": \"name\" },\n  \"git\": { \"autoFetch\": false, \"confirmCommit\": true },\n  \"recent\": [\n    { \"path\": \"src/lib/git.ts\", \"at\": \"2026-05-18T14:07:00Z\" },\n    { \"path\": \"README.md\", \"at\": \"2026-05-18T11:20:00Z\" }\n  ],\n  \"limits\": { \"maxFileBytes\": 25165824, \"maxChangeFiles\": 2000 }\n}\n",
+    "data.csv": "region,plugin,version,downloads,rating\n华东,file-manager,0.13.0,18420,4.8\n华北,log-viewer,0.9.2,9310,4.6\n华南,mobile-ledger,1.2.4,14890,4.7\n西南,theme-studio,0.4.1,5230,4.4\n东北,pi-clipboard-history,0.3.8,4102,4.5\n西北,super-domain-man,0.7.0,2890,4.3\n华中,pi-markdown,0.6.5,7710,4.6\n",
+    "guide/README.md": "# 文档仓库\n\n这个仓库与主仓库并列，用来演示项目组里的多文件夹切换。\n",
+    "guide/install.md": "# 安装\n\n1. 打开 Plugins 页面。\n2. **Load development plugin** → 选择插件目录。\n",
+    "guide/usage.md": "# 使用\n\n左侧列表选文件，右侧编辑或预览。\n",
+    "api.json": "{\n  \"name\": \"file-manager-api\",\n  \"version\": 2,\n  \"endpoints\": [\n    { \"name\": \"fm.fs.list\", \"method\": \"read\", \"auth\": true },\n    { \"name\": \"fm.git.changes\", \"method\": \"read\", \"auth\": true },\n    { \"name\": \"fm.git.commit\", \"method\": \"write\", \"auth\": true }\n  ],\n  \"limits\": { \"maxDepth\": 64, \"maxBytes\": 25165824 }\n}\n"
+  };
+
+  var DIFF = [
+    { h: "@@ -130,8 +130,14 @@ export function gitSummaryText()", lines: [[130, "  <span class='k'>const</span> parts: string[] = [];"], [131, "  <span class='k'>if</span> (git.branch) parts.<span class='fn'>push</span>(git.branch);"], [-132, "  <span class='k'>const</span> changed = (git.total ?? <span class='n'>0</span>) &gt; <span class='n'>0</span>;"], ["+132", "  <span class='cm'>// 上游领先/落后与本地变更是两件事</span>"], ["+133", "  <span class='k'>const</span> upstream = <span class='tok'>git.ahead ?? <span class='n'>0</span></span>;"], ["+134", "  <span class='k'>if</span> (upstream) parts.<span class='fn'>push</span>(<span class='s'>`↑${upstream}`</span>);"], [133, "  <span class='k'>if</span> (changed) {"], [134, "    parts.<span class='fn'>push</span>(t(<span class='s'>\"gitCountModified\"</span>, { count }));"]] },
+    { h: "@@ -188,7 +200,9 @@ function dateLabel()", lines: [[188, "  <span class='k'>const</span> value = <span class='k'>new</span> <span class='fn'>Date</span>(date);"], [-189, "    ? value.<span class='fn'>toLocaleString</span>(locale)"], ["+201", "    ? <span class='tok'>value.toLocaleString</span>(locale)"], [190, "    : date;"]] }
+  ];
+
+  /* ══════════ 状态 ══════════ */
+  var S = {
+    view: "files",                 // files | search | git
+    gitTab: "changes",             // changes | history | branches
+    root: "main",
+    expanded: { "": true, "src": true, "src/lib": true },
+    expandedDocs: { "": true },
+    selected: null,                // 树里选中的路径
+    tabs: [], active: null,
+    inspect: null,                 // 提交检视 sha
+    diffScope: "worktree",
+    q: "",
+    msg: "",
+    wrap: false,
+    csvPage: 0,
+    jsonOpen: {},
+    dirty: {},
+    content: {}
+  };
+  Object.keys(CONTENT).forEach(function (p) { S.content[p] = CONTENT[p]; });
+
+  function treeOf() { return S.root === "main" ? TREE : DOCS_TREE; }
+  function rootPrefix() { return S.root === "main" ? "" : ""; } // docs 仓库用独立树，路径不加前缀
+  function listDir(p) { var t = treeOf(); return t[p] || []; }
+  function isDir(p) { var t = treeOf(); return Object.prototype.hasOwnProperty.call(t, p); }
+  function staged() { return Object.keys(GIT).filter(function (p) { return GIT[p].staged; }); }
+  function unstaged() { return Object.keys(GIT).filter(function (p) { return !GIT[p].staged && GIT[p].k !== "?"; }); }
+  function untracked() { return Object.keys(GIT).filter(function (p) { return GIT[p].k === "?"; }); }
+  function dirtyCount() { return Object.keys(GIT).length; }
+
+  function toast(m) { var t = $("#toast"); t.textContent = m; t.classList.add("on"); clearTimeout(t._t); t._t = setTimeout(function () { t.classList.remove("on"); }, 1700); }
+
+  /* ══════════ 文件图标 ══════════ */
+  function icon(p, dir) {
+    var color = "var(--muted)";
+    if (dir) return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="' + color + '" stroke-width="1.7"><path d="M3 6h6l2 2h10v12H3z"/></svg>';
+    var e = ext(p);
+    var c = { ts: "#3178c6", tsx: "#3178c6", js: "#e2b93d", mjs: "#e2b93d", cjs: "#e2b93d", json: "#d19a66", md: "#58a6ff", css: "#bc8cff", html: "#f0883e", png: "#3fb950", zip: "#d29922", csv: "#3fb950", gitignore: "#8b949e" }[e] || "var(--muted)";
+    return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="' + c + '" stroke-width="1.6"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>';
+  }
+
+  /* ══════════ 顶栏 / 状态栏 ══════════ */
+  function paintChrome() {
+    $("#rootName").textContent = ROOTS.filter(function (r) { return r.id === S.root; })[0].name;
+    $("#rootSub").textContent = ROOTS.filter(function (r) { return r.id === S.root; })[0].label;
+    $("#railBadge").textContent = dirtyCount();
+    $("#railBadge").hidden = !dirtyCount();
+    $("#nAhead").textContent = 3;
+    $("#nBehind").textContent = 0;
+    $("#sbBranch").textContent = "main";
+    $("#sbAhead").textContent = "↑3";
+    $("#sbBehind").textContent = "0";
+    document.querySelectorAll(".rail [data-view]").forEach(function (b) {
+      b.setAttribute("aria-selected", String(b.dataset.view === S.view));
+    });
+  }
+
+  /* ══════════ 侧边栏 ══════════ */
+  function paintSide() {
+    var head = $("#sideHead"), body = $("#sideBody"), foot = $("#sideFoot");
+    head.innerHTML = ""; body.innerHTML = ""; foot.innerHTML = "";
+    if (S.view === "files") { paintFilesHead(head); paintTree(body); paintFilesFoot(foot); }
+    else if (S.view === "search") { paintSearchHead(head); paintSearch(body); }
+    else { paintGitHead(head); paintGitBody(body); paintGitFoot(foot); }
+  }
+
+  /* ── 资源管理器 ── */
+  function paintFilesHead(head) {
+    head.appendChild(el("span", "t", "资源管理器"));
+    var acts = el("span", "acts");
+    acts.innerHTML =
+      '<button class="ibtn" id="actNewFile" title="新建文件"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 3h8l4 4v14H6z"/><path d="M12 11v6M9 14h6"/></svg></button>' +
+      '<button class="ibtn" id="actNewDir" title="新建文件夹"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h6l2 2h10v12H3z"/><path d="M12 12v5M9.5 14.5h5"/></svg></button>' +
+      '<button class="ibtn" id="actRefresh" title="刷新"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 0 0-14.9-3.9L3 9"/><path d="M3 4v5h5"/><path d="M4 13a8 8 0 0 0 14.9 3.9L21 15"/><path d="M21 20v-5h-5"/></svg></button>' +
+      '<button class="ibtn" id="actCollapse" title="全部收起"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 8h16M4 16h16"/></svg></button>';
+    head.appendChild(acts);
+    setTimeout(bindFilesHead, 0);
+  }
+  function bindFilesHead() {
+    $("#actRefresh").addEventListener("click", function () { toast("已重新读取目录"); });
+    $("#actCollapse").addEventListener("click", function () {
+      S.expanded = { "": true }; paintSide(); toast("已全部收起");
+    });
+    $("#actNewFile").addEventListener("click", function () { createEntry(false); });
+    $("#actNewDir").addEventListener("click", function () { createEntry(true); });
+  }
+  function paintTree(host) {
+    var srch = el("div", "srch", '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>');
+    var input = el("input"); input.placeholder = "按文件名搜索"; input.value = S.q;
+    input.addEventListener("input", function () { S.q = input.value; paintSide(); });
+    input.addEventListener("keydown", function (e) { if (e.key === "Escape") { S.q = ""; paintSide(); } });
+    srch.appendChild(input);
+    host.appendChild(srch);
+    if (S.q.trim()) { paintSearchResults(host, S.q.trim()); return; }
+    renderLevel(host, "", 0);
+  }
+  function renderLevel(host, dir, depth) {
+    var items = listDir(dir);
+    if (!items.length) return;
+    var exp = S.root === "main" ? S.expanded : S.expandedDocs;
+    items.forEach(function (it) {
+      var name = it[0], kind = it[1];
+      var path = dir ? dir + "/" + name : name;
+      var isIgnored = IGNORED.indexOf(name) >= 0 || name === ".env.example" && false;
+      var g = GIT[path];
+      var row = el("button", "trow" + (isIgnored ? " ignored" : ""));
+      row.type = "button";
+      row.style.paddingLeft = (3 + depth * 12) + "px";
+      row.dataset.sel = String(S.selected === path);
+      var caret = kind === "dir" ? (exp[path] ? "▾" : "▸") : "";
+      row.innerHTML = '<span class="car">' + caret + '</span><span class="ico">' + icon(path, kind === "dir") + '</span>' +
+        '<span class="nm">' + esc(name) + "</span>" +
+        (g ? '<span class="gb ' + (g.k === "?" ? "?" : g.k) + '">' + (g.k === "?" ? "U" : g.k) + "</span>" : "");
+      row.addEventListener("click", function () {
+        if (kind === "dir") {
+          exp[path] = !exp[path]; S.selected = path; paintSide();
+        } else {
+          S.selected = path; openFile(path);
+        }
+      });
+      row.addEventListener("contextmenu", function (e) {
+        e.preventDefault(); S.selected = path;
+        showMenu(e.clientX, e.clientY, kind === "dir" ? dirMenu(path) : fileMenu(path));
+      });
+      host.appendChild(row);
+      if (kind === "dir" && exp[path]) renderLevel(host, path, depth + 1);
+    });
+  }
+  function paintFilesFoot(foot) {
+    foot.innerHTML = '<div class="meta" style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<span>' + dirtyCount() + " 个变更</span><span>·</span><span>" + IGNORED.length + " 个被忽略条目已隐藏</span></div>";
+  }
+  function createEntry(isDir) {
+    prompt2(isDir ? "新建文件夹" : "新建文件", isDir ? "例如 utils" : "例如 notes.md", "", function (name) {
+      if (!name) return;
+      var parent = S.selected && isDir(S.selected) ? S.selected : (S.selected ? bits(S.selected).d.replace(/\/$/, "") : "");
+      var items = listDir(parent);
+      items.push([name, isDir ? "dir" : "file"]);
+      if (isDir) (S.root === "main" ? S.expanded : S.expandedDocs)[parent ? parent + "/" + name : name] = true;
+      else S.content[(parent ? parent + "/" : "") + name] = "";
+      toast((isDir ? "已创建文件夹 " : "已创建文件 ") + name);
+      paintSide();
+      if (!isDir) openFile((parent ? parent + "/" : "") + name);
+    });
+  }
+
+  /* ── 搜索 ── */
+  function paintSearchHead(head) {
+    head.appendChild(el("span", "t", "搜索"));
+    var acts = el("span", "acts");
+    acts.innerHTML = '<button class="ibtn" id="actClearSearch" title="清空"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 6l12 12M18 6 6 18"/></svg></button>';
+    head.appendChild(acts);
+    setTimeout(function () {
+      $("#actClearSearch").addEventListener("click", function () { S.q = ""; paintSide(); });
+    }, 0);
+  }
+  function paintSearch(host) {
+    var box = el("div", "srch", '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>');
+    var input = el("input"); input.placeholder = "在整个项目中搜索文件名"; input.value = S.q;
+    input.addEventListener("input", function () { S.q = input.value; paintSide(); setTimeout(function () { var i = $("#sideBody input"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 0); });
+    box.appendChild(input);
+    host.appendChild(box);
+    if (!S.q.trim()) {
+      host.appendChild(el("div", "empty-hint", "输入关键字搜索文件名。<br>点击结果会定位到该文件并展开所在目录。"));
+      return;
+    }
+    paintSearchResults(host, S.q.trim());
+  }
+  function paintSearchResults(host, q) {
+    var all = [];
+    (function walk(dir) {
+      listDir(dir).forEach(function (it) {
+        var path = dir ? dir + "/" + it[0] : it[0];
+        if (it[1] === "dir") walk(path); else all.push(path);
+      });
+    })("");
+    var hits = all.filter(function (p) { return base(p).toLowerCase().indexOf(q.toLowerCase()) >= 0; });
+    var head = el("div", "grp", "<span>" + hits.length + " 个结果</span>");
+    host.appendChild(head);
+    if (!hits.length) { host.appendChild(el("div", "empty-hint", "没有匹配 “" + esc(q) + "” 的文件。")); return; }
+    hits.forEach(function (p) {
+      var b = bits(p);
+      var row = el("button", "frow");
+      row.type = "button"; row.dataset.k = (GIT[p] && GIT[p].k) || "";
+      row.innerHTML = '<span class="st">' + ((GIT[p] && GIT[p].k) || "") + '</span>' +
+        '<span class="lbl"><span class="dir">' + esc(b.d || "—") + '</span><span class="nm">' + esc(b.n) + "</span></span>";
+      row.addEventListener("click", function () {
+        var parts = p.split("/"); var acc = "";
+        parts.slice(0, -1).forEach(function (seg) { acc = acc ? acc + "/" + seg : seg; (S.root === "main" ? S.expanded : S.expandedDocs)[acc] = true; });
+        openFile(p); paintSide();
+      });
+      host.appendChild(row);
+    });
+  }
+
+  /* ── 源代码管理 ── */
+  function paintGitHead(head) {
+    head.appendChild(el("span", "t", "源代码管理"));
+    var acts = el("span", "acts");
+    acts.innerHTML =
+      '<button class="ibtn" id="gitRefresh" title="刷新"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M20 11a8 8 0 0 0-14.9-3.9L3 9"/><path d="M3 4v5h5"/><path d="M4 13a8 8 0 0 0 14.9 3.9L21 15"/><path d="M21 20v-5h-5"/></svg></button>' +
+      '<button class="ibtn" id="gitMore" title="更多"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg></button>';
+    head.appendChild(acts);
+    setTimeout(function () {
+      $("#gitRefresh").addEventListener("click", function () { toast("已刷新 Git 状态"); paintSide(); });
+      $("#gitMore").addEventListener("click", function () { toast("更多 Git 操作（演示）"); });
+    }, 0);
+  }
+  function paintGitBody(host) {
+    var tabs = el("div", "seg");
+    tabs.style.margin = "5px 6px 4px";
+    tabs.style.display = "flex";
+    [["changes", "变更", dirtyCount()], ["history", "历史", COMMITS.length], ["branches", "分支", BRANCHES.length]].forEach(function (t) {
+      var b = el("button", "x");
+      b.type = "button";
+      b.style.flex = "1";
+      b.style.justifyContent = "center";
+      b.setAttribute("aria-selected", String(S.gitTab === t[0]));
+      b.innerHTML = t[1] + ' <span class="n">' + t[2] + "</span>";
+      b.addEventListener("click", function () { S.gitTab = t[0]; paintSide(); });
+      tabs.appendChild(b);
+    });
+    host.appendChild(tabs);
+
+    if (S.gitTab === "changes") {
+      group(host, "已暂存", staged(), "staged");
+      group(host, "变更", unstaged(), "work");
+      group(host, "未跟踪", untracked(), "work");
+      if (!dirtyCount()) host.appendChild(el("div", "empty-hint", "工作区干净，没有未提交的改动。"));
+    } else if (S.gitTab === "history") {
+      COMMITS.forEach(function (c) {
+        var it = el("button", "cit");
+        it.type = "button"; it.dataset.merge = String(c.merge); it.dataset.sel = String(S.inspect === c.sha);
+        it.innerHTML = '<span class="g"><i></i></span><span class="t"><span class="s">' + esc(c.subject) + "</span>" +
+          '<span class="m"><span style="font-family:var(--mono)">' + c.sha + "</span><span>" + esc(c.when) + "</span>" +
+          c.refs.map(function (r) { return '<span class="ref ' + (/origin/.test(r) ? "remote" : /^v/.test(r) ? "tag" : "local") + '">' + esc(r) + "</span>"; }).join("") +
+          "</span></span>";
+        it.addEventListener("click", function () { S.inspect = c.sha; openCommit(c.sha); paintSide(); });
+        host.appendChild(it);
+      });
+    } else {
+      BRANCHES.forEach(function (b) {
+        var it = el("button", "bit");
+        it.type = "button"; it.dataset.cur = String(b.name === "main");
+        it.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" style="color:var(--faint);flex:none"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="9" r="2.2"/><path d="M6 8.2v7.6M18 11.2c0 3-4 3.4-6 4"/></svg>' +
+          '<span class="nm">' + esc(b.name) + "</span>" + (b.name === "main" ? '<span class="tag">当前</span>' : "") +
+          '<span class="tr">' + (b.ahead ? "↑" + b.ahead : "") + (b.behind ? " ↓" + b.behind : "") + "</span>";
+        it.addEventListener("click", function () {
+          if (b.name === "main") { toast("已经在 main 上"); return; }
+          toast("已切换到 " + b.name + "（演示）");
+        });
+        host.appendChild(it);
+      });
+    }
+  }
+  function group(host, title, paths, scope) {
+    if (!paths.length) return;
+    var g = el("div", "grp", "<span>" + title + '</span><span class="n">' + paths.length + "</span>");
+    var all = el("span", "all");
+    all.innerHTML = '<button type="button" title="' + (scope === "staged" ? "全部取消暂存" : "全部暂存") + '">' + (scope === "staged" ? "−" : "+") + "</button>";
+    all.querySelector("button").addEventListener("click", function () {
+      if (scope === "staged") paths.forEach(function (p) { GIT[p].staged = false; });
+      else paths.forEach(function (p) { GIT[p].staged = true; });
+      toast(scope === "staged" ? "已取消暂存全部" : "已暂存全部");
+      paintAll();
+    });
+    g.appendChild(all);
+    host.appendChild(g);
+    paths.forEach(function (p) {
+      var m = GIT[p], b = bits(p);
+      var row = el("button", "frow");
+      row.type = "button"; row.dataset.k = m.k; row.dataset.sel = String(S.active === p && !S.inspect);
+      row.title = p;
+      row.innerHTML = '<span class="st">' + (m.k === "?" ? "??" : m.k) + "</span>" +
+        '<span class="lbl"><span class="dir">' + esc(b.d || "—") + '</span><span class="nm">' + esc(b.n) + "</span></span>" +
+        '<span class="dl">' + (m.a ? '<span class="a">+' + m.a + "</span>" : "") + (m.d ? '<span class="d">−' + m.d + "</span>" : "") + "</span>" +
+        '<span class="act" title="' + (scope === "staged" ? "取消暂存" : "暂存") + '">' + (scope === "staged" ? "−" : "+") + "</span>";
+      row.addEventListener("click", function (e) {
+        if (e.target.closest(".act")) {
+          e.stopPropagation();
+          if (scope === "staged") { GIT[p].staged = false; toast("已取消暂存 " + b.n); }
+          else { GIT[p].staged = true; toast("已暂存 " + b.n); }
+          paintAll(); return;
+        }
+        S.inspect = null; S.diffScope = scope === "staged" ? "staged" : "worktree";
+        openDiff(p);
+        paintSide();
+      });
+      host.appendChild(row);
+    });
+  }
+  function paintGitFoot(foot) {
+    if (S.gitTab === "branches") {
+      foot.innerHTML = '<div class="meta">当前分支 <b style="color:var(--fg)">main</b> · 跟踪 origin/main · ' + staged().length + " 个文件已暂存</div>";
+      return;
+    }
+    foot.innerHTML =
+      '<div class="composer"><textarea id="msg" rows="2" placeholder="提交说明（Ctrl/⌘+Enter 提交）"></textarea>' +
+      '<div class="cbar"><span class="h" id="hint"></span><button class="go" id="commitBtn"></button></div></div>';
+    var ta = $("#msg"); ta.value = S.msg;
+    ta.addEventListener("input", function () { S.msg = ta.value; syncComposer(); });
+    ta.addEventListener("keydown", function (e) {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); doCommit(); }
+    });
+    $("#commitBtn").addEventListener("click", doCommit);
+    var hook = el("div", "hook", '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex:none;margin-top:2px"><path d="M12 8v5M12 17v.2"/><circle cx="12" cy="12" r="9"/></svg><span>提交会运行 <code style="font-family:var(--mono)">.husky/pre-commit</code></span>');
+    foot.appendChild(hook);
+    syncComposer();
+  }
+  function syncComposer() {
+    var btn = $("#commitBtn"), hint = $("#hint");
+    if (!btn) return;
+    var n = staged().length;
+    btn.disabled = !S.msg.trim() || !n;
+    btn.innerHTML = "提交 <span class='n'>" + n + "</span>";
+    hint.textContent = "在 main 上提交 · " + n + " 个文件";
+  }
+  function doCommit() {
+    if (!S.msg.trim() || !staged().length) return;
+    var n = staged().length;
+    COMMITS.unshift({ sha: Math.random().toString(16).slice(2, 9), subject: S.msg.split("\n")[0], author: "你", when: "刚刚", refs: ["main"], merge: false, un: true, files: staged().slice() });
+    staged().forEach(function (p) { delete GIT[p]; });
+    S.msg = ""; var ta = $("#msg"); if (ta) ta.value = "";
+    toast("已提交 " + n + " 个文件（本地）");
+    S.gitTab = "history"; paintAll();
+  }
+
+  /* ══════════ 标签与内容 ══════════ */
+  function openFile(path) {
+    S.inspect = null;
+    if (S.tabs.indexOf(path) < 0) S.tabs.push(path);
+    S.active = path;
+    if (isDir(path) || !CONTENT[path] && !path.match(/\.(png|zip)$/)) { /* 仍打开，显示只读占位 */ }
+    paintAll();
+  }
+  function openDiff(path) {
+    var key = "diff:" + path;
+    if (S.tabs.indexOf(key) < 0) S.tabs.push(key);
+    S.active = key;
+    paintAll();
+  }
+  function openCommit(sha) {
+    var key = "@" + sha;
+    if (S.tabs.indexOf(key) < 0) S.tabs.push(key);
+    S.active = key;
+    paintAll();
+  }
+  function closeTab(key) {
+    S.tabs = S.tabs.filter(function (t) { return t !== key; });
+    if (S.active === key) { S.active = S.tabs.length ? S.tabs[S.tabs.length - 1] : null; if (key.charAt(0) === "@") S.inspect = null; }
+    paintAll();
+  }
+  function paintTabs() {
+    var host = $("#tabs"); host.innerHTML = "";
+    if (!S.tabs.length) { host.innerHTML = '<span class="meta" style="padding:6px 4px">没有打开的文档</span>'; return; }
+    S.tabs.forEach(function (t) {
+      var isDiff = t.indexOf("diff:") === 0;
+      var isCommit = t.charAt(0) === "@";
+      var path = isDiff ? t.slice(5) : (isCommit ? "" : t);
+      var label = isCommit ? t.slice(1, 8) + " · 提交" : base(path) + (isDiff ? " · 差异" : "");
+      var tab = el("button", "tab");
+      tab.type = "button"; tab.setAttribute("aria-selected", String(S.active === t));
+      tab.title = isCommit ? t.slice(1) : path + (isDiff ? "（差异）" : "");
+      tab.innerHTML = (isCommit
+        ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="9" r="2.2"/><path d="M6 8.2v7.6M18 11.2c0 3-4 3.4-6 4"/></svg>'
+        : icon(path, false)) + esc(label) +
+        (!isCommit && S.dirty[path] ? '<span class="dirty"></span>' : "") + '<span class="x">×</span>';
+      tab.addEventListener("click", function (e) {
+        if (e.target.closest(".x")) { e.stopPropagation(); closeTab(t); return; }
+        S.active = t; if (!isCommit) S.inspect = null;
+        paintAll();
+      });
+      host.appendChild(tab);
+    });
+  }
+
+  function kindOf(path) {
+    if (/\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)$/i.test(path)) return "image";
+    if (/\.(zip|apk|exe|dmg|tar|gz)$/i.test(path)) return "binary";
+    if (/\.(md|markdown)$/i.test(path)) return "markdown";
+    if (/\.(csv|tsv)$/i.test(path)) return "table";
+    if (/\.json$/i.test(path)) return "json";
+    if (/\.pdf$/i.test(path)) return "pdf";
+    return "code";
+  }
+
+  function paintContent() {
+    var host = $("#views"); host.innerHTML = "";
+    if (!S.active) { host.appendChild(emptyState()); $("#sbPos").textContent = "—"; $("#sbKind").textContent = ""; return; }
+
+    if (S.active.charAt(0) === "@") return paintCommitView(host, S.active.slice(1));
+    if (S.active.indexOf("diff:") === 0) return paintDiffView(host, S.active.slice(5));
+
+    var path = S.active;
+    var kind = kindOf(path);
+    var m = GIT[path];
+    var b = bits(path);
+
+    var bar = el("div", "toolbar2");
+    bar.innerHTML = (m ? '<span class="badge ' + m.k + '">' + (m.k === "?" ? "??" : m.k) + "</span>" : "") +
+      '<span class="path"><span class="d">' + esc(b.d) + "</span>" + esc(b.n) + "</span>" +
+      '<span class="nums">' + (m && m.a ? '<span class="a">+' + m.a + "</span>" : "") + (m && m.d ? '<span class="d">−' + m.d + "</span>" : "") + "</span>";
+    if (m) {
+      var seg = el("div", "seg");
+      seg.innerHTML = '<button type="button" data-kind="edit" aria-selected="true">编辑</button><button type="button" data-kind="diff">差异 <span class="n">' + (m.a || 0) + " −" + (m.d || 0) + "</span></button>";
+      seg.querySelectorAll("button").forEach(function (btn) {
+        btn.addEventListener("click", function () { openDiff(path); });
+      });
+      bar.appendChild(seg);
+    }
+    var sp = el("span", "sp"); bar.appendChild(sp);
+    var meta = el("span", "meta"); meta.textContent = { code: "纯文本源码", markdown: "Markdown 预览", image: "图片", binary: "二进制", table: "表格（分页）", json: "JSON", pdf: "PDF（只读）" }[kind];
+    bar.appendChild(meta);
+    if (kind === "markdown") {
+      var mdseg = el("div", "seg");
+      mdseg.innerHTML = '<button type="button" aria-selected="true">预览</button><button type="button" aria-selected="false">编辑</button>';
+      mdseg.querySelectorAll("button").forEach(function (x) {
+        x.addEventListener("click", function () {
+          S.mdMode = x.textContent === "编辑" ? "edit" : "preview";
+          mdseg.querySelectorAll("button").forEach(function (y) { y.setAttribute("aria-selected", String(y === x)); });
+          paintContent();
+        });
+      });
+      bar.appendChild(mdseg);
+    }
+    host.appendChild(bar);
+
+    if (kind === "code") { host.appendChild(codeView(path)); $("#sbKind").textContent = "源码"; }
+    else if (kind === "markdown") {
+      if (S.mdMode === "edit") { host.appendChild(codeView(path)); $("#sbKind").textContent = "Markdown 编辑"; }
+      else { host.appendChild(markdownView(path)); $("#sbKind").textContent = "Markdown 预览"; }
+    }
+    else if (kind === "image") { host.appendChild(imageView(path)); $("#sbKind").textContent = "图片"; }
+    else if (kind === "binary") { host.appendChild(binaryView(path)); $("#sbKind").textContent = "二进制"; }
+    else if (kind === "table") { host.appendChild(tableView(path)); $("#sbKind").textContent = "表格"; }
+    else if (kind === "json") { host.appendChild(jsonView(path)); $("#sbKind").textContent = "JSON"; }
+    else if (kind === "pdf") { host.appendChild(pdfView(path)); $("#sbKind").textContent = "PDF"; }
+  }
+
+  function emptyState() {
+    var e = el("div", "empty");
+    e.innerHTML = '<span class="glyph"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 6h6l2 2h10v12H3z"/></svg></span>' +
+      "<h3>还没有打开的文件</h3><p>从左侧资源管理器选择文件，或按 <b>Ctrl+Shift+E</b> 回到资源管理器、<b>Ctrl+Shift+G</b> 打开源代码管理。</p>" +
+      '<div class="kbd"><span>Ctrl+P 文件搜索</span><span>Ctrl+Shift+F 全局搜索</span><span>Ctrl+Shift+G Git</span></div>' +
+      '<div class="acts"><button class="tbtn" id="eFiles">打开资源管理器</button><button class="tbtn" id="eGit">查看变更</button></div>';
+    setTimeout(function () {
+      $("#eFiles").addEventListener("click", function () { S.view = "files"; paintAll(); });
+      $("#eGit").addEventListener("click", function () { S.view = "git"; S.gitTab = "changes"; paintAll(); });
+    }, 0);
+    return e;
+  }
+
+  /* 代码编辑器（高亮 + 可编辑 + 脏标记 + 保存） */
+  var KW = ["import", "from", "export", "const", "let", "var", "function", "return", "if", "else", "for", "while", "new", "class", "extends", "type", "interface", "async", "await", "true", "false", "null", "undefined", "typeof", "of", "in", "switch", "case", "break", "default", "throw", "try", "catch"];
+  /**
+   * 极简分词器：逐字符扫描一次，识别字符串 / 行注释 / 单词 / 数字，
+   * 产出的片段已按类型包裹，不会再把生成的 <span class="s"> 自身当成标识符二次包裹。
+   * 只为演示高亮，不追求完整语法。
+   */
+  function highlight(text, path) {
+    var json = ext(path) === "json";
+    var out = "";
+    var i = 0, n = text.length;
+    while (i < n) {
+      var ch = text[i];
+      // 行注释
+      if (ch === "/" && text[i + 1] === "/" && !json) {
+        var e1 = text.indexOf("\n", i);
+        if (e1 < 0) e1 = n;
+        out += '<span class="cm">' + esc(text.slice(i, e1)) + "</span>";
+        i = e1;
+        continue;
+      }
+      // 字符串（" ' `）
+      if (ch === '"' || ch === "'" || ch === "`") {
+        var q = ch, j = i + 1;
+        while (j < n && text[j] !== q) { if (text[j] === "\\") j++; j++; }
+        j = Math.min(j + 1, n);
+        out += '<span class="s">' + esc(text.slice(i, j)) + "</span>";
+        i = j;
+        continue;
+      }
+      // 数字
+      if (/[0-9]/.test(ch)) {
+        var k = i;
+        while (k < n && /[0-9.]/.test(text[k])) k++;
+        out += '<span class="n">' + esc(text.slice(i, k)) + "</span>";
+        i = k;
+        continue;
+      }
+      // 单词
+      if (/[A-Za-z_$]/.test(ch)) {
+        var w = i;
+        while (w < n && /[A-Za-z0-9_$]/.test(text[w])) w++;
+        var word = text.slice(i, w);
+        var after = text.slice(w).match(/^\s*\(/);
+        if (KW.indexOf(word) >= 0) out += '<span class="k">' + esc(word) + "</span>";
+        else if (after) out += '<span class="fn">' + esc(word) + "</span>";
+        else out += esc(word);
+        i = w;
+        continue;
+      }
+      out += esc(ch);
+      i++;
+    }
+    return out;
+  }
+  function codeView(path) {
+    var wrap = el("div", "editor");
+    var outer = el("div", "editwrap");
+    var text = S.content[path] != null ? S.content[path] : "";
+    var lines = text.split("\n");
+    var gut = el("div", "gutter2");
+    var pre = el("pre");
+    var ta = el("textarea");
+    ta.value = text;
+    ta.spellcheck = false;
+    ta.setAttribute("aria-label", path);
+    function repaint() {
+      gut.innerHTML = lines.map(function (_, i) { return "<div>" + (i + 1) + "</div>"; }).join("");
+      pre.innerHTML = highlight(ta.value, path) || " ";
+    }
+    repaint();
+    ta.addEventListener("input", function () {
+      S.content[path] = ta.value;
+      S.dirty[path] = true;
+      lines = ta.value.split("\n");
+      repaint();
+      paintTabs();
+      paintStatusPos(ta);
+    });
+    ta.addEventListener("keydown", function (e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveFile(path); }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        var st = ta.selectionStart, en = ta.selectionEnd;
+        ta.value = ta.value.slice(0, st) + "  " + ta.value.slice(en);
+        ta.selectionStart = ta.selectionEnd = st + 2;
+        ta.dispatchEvent(new Event("input"));
+      }
+    });
+    ta.addEventListener("click", function () { paintStatusPos(ta); });
+    ta.addEventListener("keyup", function () { paintStatusPos(ta); });
+    ta.addEventListener("scroll", function () { pre.style.transform = "translateY(" + (-ta.scrollTop) + "px)"; });
+    var cw = el("div", "codewrap"); cw.appendChild(pre); cw.appendChild(ta);
+    outer.appendChild(gut); outer.appendChild(cw);
+    wrap.appendChild(outer);
+    setTimeout(function () { paintStatusPos(ta); ta.focus(); }, 0);
+    return wrap;
+  }
+  function paintStatusPos(ta) {
+    var upto = ta.value.slice(0, ta.selectionStart).split("\n");
+    $("#sbPos").textContent = "行 " + upto.length + "，列 " + (upto[upto.length - 1].length + 1);
+  }
+  function saveFile(path) {
+    if (!S.dirty[path]) { toast("没有改动，未写盘"); return; }
+    S.dirty[path] = false;
+    var m = GIT[path];
+    if (m && m.k === "?") { /* 新建文件保存后进入未跟踪 */ }
+    else if (!m) { GIT[path] = { k: "M", a: 3, d: 1, staged: false }; }
+    toast("已保存 " + base(path));
+    paintAll();
+  }
+
+  /* Markdown 预览 */
+  function markdownView(path) {
+    var box = el("div", "md");
+    box.innerHTML = md(S.content[path] || "");
+    return box;
+  }
+  function md(src) {
+    var h = esc(src);
+    h = h.replace(/```([a-z]*)\n([\s\S]*?)```/g, function (_, lang, code) { return "<pre><code>" + code + "</code></pre>"; });
+    h = h.replace(/^### (.*)$/gm, "<h3>$1</h3>").replace(/^## (.*)$/gm, "<h2>$1</h2>").replace(/^# (.*)$/gm, "<h1>$1</h1>");
+    // 表格：先把连续的 |行| 收集成一个块，第一行作表头，第二行作对齐分隔，其余作正文
+    h = h.replace(/(?:^\|.*\|\s*$\n?){2,}/gm, function (block) {
+      var rows = block.trim().split("\n").filter(function (r) { return r.trim(); });
+      if (rows.length < 2) return block;
+      var cellsOf = function (r) { return r.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); }); };
+      var head = cellsOf(rows[0]);
+      var bodyRows = rows.slice(1).filter(function (r) { return !cellsOf(r).every(function (c) { return /^:?-{2,}:?$/.test(c); }); });
+      return "<table><thead><tr>" + head.map(function (c) { return "<th>" + c + "</th>"; }).join("") + "</tr></thead><tbody>" +
+        bodyRows.map(function (r) { return "<tr>" + cellsOf(r).map(function (c) { return "<td>" + c + "</td>"; }).join("") + "</tr>"; }).join("") +
+        "</tbody></table>\n";
+    });
+    h = h.replace(/^&gt; (.*)$/gm, "<blockquote>$1</blockquote>");
+    h = h.replace(/^- (.*)$/gm, "<li>$1</li>");
+    h = h.replace(/(<li>[\s\S]*?<\/li>)(?=\n(?!<li>))/g, "<ul>$1</ul>");
+    h = h.replace(/`([^`]+)`/g, "<code>$1</code>");
+    h = h.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+    h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="#">$1</a>');
+    h = h.split("\n").map(function (line) {
+      if (/^\s*$/.test(line) || /^<(h\d|ul|pre|table|blockquote)/.test(line) || /^<\/?(ul|li)/.test(line)) return line;
+      if (/^\s*<tr|^\s*<\/?(table|thead|tbody)/.test(line)) return line;
+      return "<p>" + line + "</p>";
+    }).join("\n");
+    return h;
+  }
+
+  /* 图片 */
+  function imageView(path) {
+    var st = el("div", "stage");
+    st.innerHTML = '<div class="stagebox">' +
+      '<svg width="120" height="90" viewBox="0 0 120 90"><rect width="120" height="90" rx="6" fill="#58a6ff22" stroke="#58a6ff66"/><circle cx="38" cy="32" r="10" fill="#58a6ff66"/><path d="M10 76l28-24 18 14 16-12 30 22z" fill="#58a6ff44"/></svg>' +
+      '<span class="cap">' + esc(base(path)) + " · 1024 × 768 · 84.2 KB</span></div>";
+    return st;
+  }
+  function binaryView(path) {
+    var st = el("div", "stage");
+    st.innerHTML = '<div class="stagebox"><span class="glyph" style="width:44px;height:44px;display:grid;place-items:center;border-radius:11px;background:var(--raised);border:1px solid var(--border-strong)">' +
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 7h16M4 12h16M4 17h16"/></svg></span>' +
+      "<div><b>" + esc(base(path)) + "</b><br><span class='meta'>二进制文件（zip、apk、exe 等），暂不支持预览 · 2.4 MB</span></div></div>";
+    return st;
+  }
+  function pdfView(path) {
+    var st = el("div", "stage");
+    st.innerHTML = '<div class="stagebox">' +
+      '<svg width="86" height="112" viewBox="0 0 86 112"><rect width="86" height="112" rx="4" fill="#f3f3f3" stroke="#bbb"/><rect x="10" y="14" width="66" height="4" fill="#ccc"/><rect x="10" y="24" width="50" height="4" fill="#ddd"/><rect x="10" y="38" width="66" height="30" fill="#e8e8e8"/><rect x="10" y="76" width="66" height="4" fill="#ddd"/><rect x="10" y="84" width="40" height="4" fill="#ddd"/></svg>' +
+      '<span class="cap">' + esc(base(path)) + " · 12 页 · 只读预览</span></div>";
+    return st;
+  }
+
+  /* CSV 表格 */
+  function tableView(path) {
+    var wrap = el("div", "tablewrap");
+    var raw = (S.content[path] || "").trim().split("\n").map(function (l) { return l.split(","); });
+    var head = raw[0], rows = raw.slice(1);
+    var pageSize = 5;
+    var page = Math.min(S.csvPage, Math.max(0, Math.ceil(rows.length / pageSize) - 1));
+    var start = page * pageSize;
+    var view = el("div", "tableview");
+    var html = "<table><thead><tr><th class='rn'>#</th>" + head.map(function (h2) { return "<th>" + esc(h2) + "</th>"; }).join("") + "</tr></thead><tbody>";
+    rows.slice(start, start + pageSize).forEach(function (r, i) {
+      html += "<tr><td class='rn'>" + (start + i + 1) + "</td>" + r.map(function (c) {
+        var num = /^-?\d+(\.\d+)?$/.test(c.trim());
+        return "<td class='" + (num ? "num" : "") + "'>" + esc(c) + "</td>";
+      }).join("") + "</tr>";
+    });
+    html += "</tbody></table>";
+    view.innerHTML = html;
+    wrap.appendChild(view);
+    var total = Math.ceil(rows.length / pageSize);
+    var pager = el("div", "pager");
+    pager.innerHTML = "<span>第 " + (start + 1) + "–" + Math.min(start + pageSize, rows.length) + " 行 / 共 " + rows.length + " 行</span>" +
+      '<span class="pg"><button type="button" data-p="first">«</button><button type="button" data-p="prev">‹</button><button type="button" data-p="next">›</button><button type="button" data-p="last">»</button></span>';
+    pager.querySelector('[data-p="first"]').disabled = page === 0;
+    pager.querySelector('[data-p="prev"]').disabled = page === 0;
+    pager.querySelector('[data-p="next"]').disabled = page >= total - 1;
+    pager.querySelector('[data-p="last"]').disabled = page >= total - 1;
+    pager.querySelectorAll("button").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var p = btn.dataset.p;
+        S.csvPage = p === "first" ? 0 : p === "prev" ? page - 1 : p === "next" ? page + 1 : total - 1;
+        paintContent();
+      });
+    });
+    wrap.appendChild(pager);
+    return wrap;
+  }
+
+  /* JSON 树 */
+  function jsonView(path) {
+    var box = el("div", "jt");
+    var data;
+    try { data = JSON.parse(S.content[path] || "{}"); }
+    catch (e) { box.innerHTML = '<p style="color:var(--danger)">解析失败：' + esc(e.message) + "</p>"; return box; }
+    function node(key, val, depth, pathKey) {
+      var row = el("div");
+      var isObj = val && typeof val === "object";
+      var openKey = pathKey;
+      var isOpen = S.jsonOpen[openKey] !== false && depth < 2;
+      if (isObj) {
+        var arr = Array.isArray(val);
+        var count = arr ? val.length : Object.keys(val).length;
+        var head = el("div", "row2");
+        head.innerHTML = '<span class="tg">' + (isOpen ? "▾" : "▸") + "</span>" +
+          (key ? '<span class="jk">' + esc(key) + "</span><span class='jn'>:</span>" : "") +
+          "<span class='jn'>" + (arr ? "[" : "{") + '</span><span class="count">' + count + (arr ? " 项" : " 键") + "</span>";
+        head.querySelector(".tg").addEventListener("click", function () { S.jsonOpen[openKey] = !isOpen; paintContent(); });
+        row.appendChild(head);
+        if (isOpen) {
+          var kids = el("div", "kids");
+          (arr ? val : Object.keys(val)).forEach(function (k, i) { kids.appendChild(node(arr ? String(i) : k, val[k], depth + 1, openKey + "/" + (arr ? i : k))); });
+          row.appendChild(kids);
+        }
+      } else {
+        var cls = typeof val === "string" ? "js" : typeof val === "number" ? "jnum" : "jl";
+        var shown = typeof val === "string" ? '"' + esc(val) + '"' : esc(String(val));
+        row.innerHTML = '<div class="row2"><span class="tg"></span>' + (key ? '<span class="jk">' + esc(key) + '</span><span class="jn">:</span>' : "") + '<span class="' + cls + '">' + shown + "</span></div>";
+      }
+      return row;
+    }
+    if (data && typeof data === "object") {
+      (Array.isArray(data) ? data.map(function (_, i) { return String(i); }) : Object.keys(data)).forEach(function (k) {
+        box.appendChild(node(Array.isArray(data) ? k : k, data[k], 0, k));
+      });
+    } else box.appendChild(el("div", "jt", esc(String(data))));
+    return box;
+  }
+
+  /* 差异视图 */
+  function paintDiffView(host, path) {
+    var m = GIT[path] || { k: "M", a: 12, d: 4 };
+    var b = bits(path);
+    var bar = el("div", "toolbar2");
+    bar.innerHTML = '<span class="badge ' + m.k + '">' + (m.k === "?" ? "??" : m.k) + "</span>" +
+      '<span class="path"><span class="d">' + esc(b.d) + "</span>" + esc(b.n) + "</span>" +
+      '<span class="nums"><span class="a">+' + (m.a || 0) + '</span><span class="d">−' + (m.d || 0) + "</span></span>";
+    var seg = el("div", "seg");
+    seg.innerHTML = '<button type="button" data-s="worktree" aria-selected="' + (S.diffScope !== "staged") + '">未暂存</button><button type="button" data-s="staged" aria-selected="' + (S.diffScope === "staged") + '">已暂存</button>';
+    seg.querySelectorAll("button").forEach(function (x) {
+      x.addEventListener("click", function () { S.diffScope = x.dataset.s; paintContent(); });
+    });
+    bar.appendChild(seg);
+    var sp = el("span", "sp"); bar.appendChild(sp);
+    var mm = el("span", "meta"); mm.textContent = S.diffScope === "staged" ? "HEAD → 暂存区" : "暂存区 → 磁盘"; bar.appendChild(mm);
+    host.appendChild(bar);
+
+    var d = el("div", "diff");
+    DIFF.forEach(function (h) {
+      d.appendChild(el("div", "hunk", '<span class="r">' + esc(h.h.split(" ")[0]) + '</span><span class="c">' + esc(h.h.replace(/^@@\s*\S+\s*\S+\s*@@\s*/, "")) + "</span>"));
+      h.lines.forEach(function (l) {
+        var sign = typeof l[0] === "string" ? l[0].charAt(0) : (l[0] < 0 ? "-" : " ");
+        var no = typeof l[0] === "string" ? l[0].slice(1) : String(l[0]);
+        var cls = "ln" + (sign === "+" ? " add" : sign === "-" ? " del" : "");
+        d.appendChild(el("div", cls, '<span class="no">' + no + '</span><span class="sg">' + (sign === " " ? " " : sign) + '</span><span class="cd">' + l[1] + "</span>"));
+      });
+    });
+    host.appendChild(d);
+    $("#sbKind").textContent = "差异";
+    $("#sbPos").textContent = "—";
+  }
+
+  /* 提交检视 */
+  function paintCommitView(host, sha) {
+    var c = COMMITS.filter(function (x) { return x.sha === sha; })[0];
+    if (!c) { host.appendChild(emptyState()); return; }
+    var bar = el("div", "toolbar2");
+    bar.innerHTML = '<span class="badge R">' + (c.merge ? "M" : "C") + "</span>" +
+      '<span class="path">' + esc(c.subject) + "</span>" +
+      '<span class="meta">' + esc(c.author) + " · " + esc(c.when) + " · <span style=\"font-family:var(--mono)\">" + c.sha + "</span>" +
+      (c.un ? ' · <span style="color:var(--modified)">未推送</span>' : ' · <span style="color:var(--added)">已同步</span>') + "</span>";
+    var sp = el("span", "sp"); bar.appendChild(sp);
+    var copy = el("button", "tbtn", "复制 SHA");
+    copy.addEventListener("click", function () { toast("已复制 " + c.sha); });
+    bar.appendChild(copy);
+    host.appendChild(bar);
+
+    var body = el("div"); body.style.cssText = "flex:1;min-height:0;display:flex";
+    var files = el("div"); files.style.cssText = "flex:none;width:250px;border-right:1px solid var(--border-strong);overflow:auto;padding:4px 5px";
+    files.appendChild(el("div", "grp", "<span>本次提交的文件</span><span class='n'>" + c.files.length + "</span>"));
+    c.files.forEach(function (p, i) {
+      var m = GIT[p] || { k: "M", a: 9, d: 4 }, b = bits(p);
+      var row = el("button", "frow");
+      row.type = "button"; row.dataset.k = m.k; row.dataset.sel = String(i === 0);
+      row.innerHTML = '<span class="st">' + m.k + '</span><span class="lbl"><span class="dir">' + esc(b.d || "—") + '</span><span class="nm">' + esc(b.n) + '</span></span><span class="dl"><span class="a">+' + m.a + "</span><span class='d'>−" + m.d + "</span></span>";
+      files.appendChild(row);
+    });
+    body.appendChild(files);
+    var right = el("div"); right.style.cssText = "flex:1;min-width:0;display:flex;flex-direction:column";
+    var sub = el("div", "toolbar2"); sub.innerHTML = '<span class="meta">与父提交 ' + (c.merge ? "合并两个父提交" : "c81d4a2") + " 比较</span>";
+    right.appendChild(sub);
+    var d = el("div", "diff");
+    DIFF.forEach(function (h) {
+      d.appendChild(el("div", "hunk", '<span class="r">' + esc(h.h.split(" ")[0]) + '</span><span class="c">' + esc(h.h.replace(/^@@\s*\S+\s*\S+\s*@@\s*/, "")) + "</span>"));
+      h.lines.forEach(function (l) {
+        var sign = typeof l[0] === "string" ? l[0].charAt(0) : (l[0] < 0 ? "-" : " ");
+        var no = typeof l[0] === "string" ? l[0].slice(1) : String(l[0]);
+        d.appendChild(el("div", "ln" + (sign === "+" ? " add" : sign === "-" ? " del" : ""), '<span class="no">' + no + '</span><span class="sg">' + (sign === " " ? " " : sign) + '</span><span class="cd">' + l[1] + "</span>"));
+      });
+    });
+    right.appendChild(d);
+    body.appendChild(right);
+    host.appendChild(body);
+    $("#sbKind").textContent = "提交检视";
+    $("#sbPos").textContent = "—";
+  }
+
+  /* ══════════ 右键菜单 ══════════ */
+  var menuEl = null;
+  function showMenu(x, y, items) {
+    closeMenu();
+    var m = el("div", "menu");
+    items.forEach(function (it) {
+      if (it === "-") { m.appendChild(el("hr")); return; }
+      var b = el("button", it.danger ? "danger" : "");
+      b.type = "button";
+      b.innerHTML = "<span>" + esc(it.label) + "</span>" + (it.key ? '<span class="sc">' + esc(it.key) + "</span>" : "");
+      b.addEventListener("click", function () { closeMenu(); it.run(); });
+      m.appendChild(b);
+    });
+    document.body.appendChild(m);
+    var r = m.getBoundingClientRect();
+    m.style.left = Math.min(x, window.innerWidth - r.width - 8) + "px";
+    m.style.top = Math.min(y, window.innerHeight - r.height - 8) + "px";
+    menuEl = m;
+    setTimeout(function () {
+      document.addEventListener("pointerdown", onDocDown, true);
+    }, 0);
+  }
+  function onDocDown(e) { if (menuEl && !menuEl.contains(e.target)) closeMenu(); }
+  function closeMenu() {
+    if (menuEl) { menuEl.remove(); menuEl = null; }
+    document.removeEventListener("pointerdown", onDocDown, true);
+  }
+  function fileMenu(path) {
+    return [
+      { label: "打开", key: "Enter", run: function () { openFile(path); } },
+      { label: "查看差异", run: function () { openDiff(path); } },
+      { label: "在编辑器中打开", run: function () { openFile(path); toast("已在内容区打开"); } },
+      "-",
+      { label: "复制相对路径", run: function () { toast("已复制 " + path); } },
+      { label: "复制绝对路径", run: function () { toast("已复制 ~/" + path); } },
+      "-",
+      { label: "重命名…", run: function () { renameEntry(path); } },
+      { label: "用默认应用打开", run: function () { toast("已交给系统默认应用：" + base(path)); } },
+      { label: "在文件夹中显示", run: function () { toast("已在文件管理器中定位"); } },
+      "-",
+      { label: "删除", danger: true, key: "Del", run: function () { removeEntry(path); } }
+    ];
+  }
+  function dirMenu(path) {
+    return [
+      { label: "新建文件…", run: function () { S.selected = path; createEntry(false); } },
+      { label: "新建文件夹…", run: function () { S.selected = path; createEntry(true); } },
+      "-",
+      { label: "复制相对路径", run: function () { toast("已复制 " + path); } },
+      { label: "全部展开", run: function () { expandAll(path); } },
+      "-",
+      { label: "删除文件夹", danger: true, run: function () { removeEntry(path); } }
+    ];
+  }
+  function expandAll(p) {
+    var exp = S.root === "main" ? S.expanded : S.expandedDocs;
+    (function walk(d) { exp[d] = true; listDir(d).forEach(function (it) { if (it[1] === "dir") walk(d ? d + "/" + it[0] : it[0]); }); })(p);
+    paintSide();
+  }
+  function renameEntry(path) {
+    prompt2("重命名", "输入新名称", base(path), function (name) {
+      if (!name || name === base(path)) return;
+      var dir = bits(path).d.replace(/\/$/, "");
+      var items = listDir(dir);
+      items.forEach(function (it) { if ((dir ? dir + "/" + it[0] : it[0]) === path) it[0] = name; });
+      if (S.content[path] != null) { S.content[(dir ? dir + "/" : "") + name] = S.content[path]; delete S.content[path]; }
+      if (GIT[path]) { GIT[(dir ? dir + "/" : "") + name] = GIT[path]; delete GIT[path]; }
+      S.tabs = S.tabs.map(function (t) { return t === path ? (dir ? dir + "/" : "") + name : t; });
+      S.active = (dir ? dir + "/" : "") + name;
+      toast("已重命名为 " + name);
+      paintAll();
+    });
+  }
+  function removeEntry(path) {
+    confirm2("删除确认", "确定要删除 " + base(path) + " 吗？" + (isDir(path) ? "文件夹会连同内容一起删除。" : "") + "此项可撤销（演示）。", function () {
+      var dir = bits(path).d.replace(/\/$/, "");
+      var items = listDir(dir);
+      var idx = -1;
+      items.forEach(function (it, i) { if ((dir ? dir + "/" + it[0] : it[0]) === path) idx = i; });
+      if (idx >= 0) items.splice(idx, 1);
+      delete GIT[path];
+      S.tabs = S.tabs.filter(function (t) { return t !== path && t !== "diff:" + path; });
+      if (S.active === path || S.active === "diff:" + path) S.active = S.tabs[0] || null;
+      toast("已删除 " + base(path));
+      paintAll();
+    });
+  }
+
+  /* ══════════ 模态框 ══════════ */
+  function modal(title, desc, withInput, initial, onOk, okLabel, danger) {
+    var wrap = el("div", "modal");
+    var box = el("div", "box");
+    box.innerHTML = "<h3>" + esc(title) + "</h3><p>" + esc(desc) + "</p>";
+    var input;
+    if (withInput) {
+      input = el("input"); input.value = initial || ""; box.appendChild(input);
+    }
+    var row = el("div", "row3");
+    var cancel = el("button", "", "取消");
+    var ok = el("button", danger ? "dng" : "pri", okLabel || "确定");
+    row.appendChild(cancel); row.appendChild(ok);
+    box.appendChild(row);
+    wrap.appendChild(box);
+    app.appendChild(wrap);
+    if (input) { input.focus(); input.select(); }
+    function done(v) { wrap.remove(); document.removeEventListener("keydown", onKey); }
+    function onKey(e) {
+      if (e.key === "Escape") done();
+      if (e.key === "Enter" && (!withInput || document.activeElement === input)) { var v = withInput ? input.value.trim() : true; done(); onOk(v); }
+    }
+    cancel.addEventListener("click", function () { done(); });
+    ok.addEventListener("click", function () { var v = withInput ? input.value.trim() : true; done(); onOk(v); });
+    document.addEventListener("keydown", onKey);
+  }
+  function prompt2(title, desc, initial, cb) { modal(title, desc, true, initial, cb, "确定"); }
+  function confirm2(title, desc, cb) { modal(title, desc, false, "", cb, "删除", true); }
+
+  /* ══════════ 全局绘制 ══════════ */
+  function paintAll() {
+    paintChrome(); paintSide(); paintTabs(); paintContent();
+    if (S.view !== "files" || dirtyCount() === 0) $("#railBadge").hidden = !dirtyCount();
+  }
+
+  /* ══════════ 绑定 ══════════ */
+  document.querySelectorAll(".rail [data-view]").forEach(function (b) {
+    b.addEventListener("click", function () {
+      S.view = b.dataset.view;
+      if (S.view === "git" && !S.gitTab) S.gitTab = "changes";
+      paintAll();
+    });
+  });
+  function toggleTheme() { var d = document.documentElement; d.dataset.theme = d.dataset.theme === "dark" ? "light" : "dark"; }
+  $("#themeBtn").addEventListener("click", toggleTheme);
+  $("#railTheme").addEventListener("click", toggleTheme);
+  $("#railHelp").addEventListener("click", function () {
+    modal("快捷键", "Ctrl+Shift+E 资源管理器 · Ctrl+Shift+F 搜索 · Ctrl+Shift+G 源代码管理 · Ctrl+S 保存 · Ctrl+W 关闭标签 · Delete 删除选中项", false, "", function () { }, "知道了");
+  });
+  $("#rootChip").addEventListener("click", function () {
+    var next = S.root === "main" ? "docs" : "main";
+    S.root = next; S.selected = null; S.q = "";
+    toast("已切换到 " + ROOTS.filter(function (r) { return r.id === next; })[0].label);
+    paintAll();
+  });
+  $("#syncPush").addEventListener("click", function () { toast("已推送 3 个提交到 origin/main（演示）"); });
+  $("#syncPull").addEventListener("click", function () { toast("已是最新，无需拉取（演示）"); });
+  $("#syncFetch").addEventListener("click", function () { toast("已 fetch origin（演示）"); });
+  $("#wrapBtn").addEventListener("click", function () {
+    S.wrap = !S.wrap;
+    $("#wrapBtn").setAttribute("aria-pressed", String(S.wrap));
+    document.querySelectorAll(".codewrap pre, .codewrap textarea").forEach(function (n) { n.style.whiteSpace = S.wrap ? "pre-wrap" : "pre"; });
+    toast(S.wrap ? "已开启自动换行" : "已关闭自动换行");
+  });
+
+  /* 侧栏拖宽 */
+  (function () {
+    var g = $("#gutter"), on = false;
+    g.addEventListener("pointerdown", function (e) { on = true; g.setPointerCapture(e.pointerId); });
+    g.addEventListener("pointermove", function (e) {
+      if (!on) return;
+      var rect = app.getBoundingClientRect();
+      var w = Math.max(220, Math.min(520, e.clientX - rect.left - 46));
+      $("#side").style.width = w + "px";
+    });
+    g.addEventListener("pointerup", function (e) { on = false; g.releasePointerCapture(e.pointerId); });
+  })();
+
+  /* 快捷键 */
+  document.addEventListener("keydown", function (e) {
+    var mod = e.ctrlKey || e.metaKey;
+    if (mod && e.shiftKey && e.key.toLowerCase() === "e") { e.preventDefault(); S.view = "files"; paintAll(); }
+    if (mod && e.shiftKey && e.key.toLowerCase() === "g") { e.preventDefault(); S.view = "git"; S.gitTab = "changes"; paintAll(); }
+    if (mod && e.shiftKey && e.key.toLowerCase() === "f") { e.preventDefault(); S.view = "search"; paintAll(); setTimeout(function () { var i = $("#sideBody input"); if (i) i.focus(); }, 30); }
+    if (mod && e.key.toLowerCase() === "w") { e.preventDefault(); if (S.active) closeTab(S.active); }
+    if (e.key === "Escape") closeMenu();
+    if (e.key === "Delete" && S.view === "files" && S.selected && document.activeElement.tagName !== "TEXTAREA" && document.activeElement.tagName !== "INPUT") {
+      e.preventDefault(); removeEntry(S.selected);
+    }
+  });
+
+  /* 首屏：打开一个文件 + 树里选中，让两侧都有内容 */
+  S.selected = "src/lib/git.ts";
+  S.tabs = ["src/lib/git.ts"];
+  S.active = "src/lib/git.ts";
+  paintAll();
+})();
+</script>
+</body>
+</html>

@@ -148,6 +148,7 @@ const IGNORE_FILE_NAMES = [".gitignore", ".ignore"];
 let dataPath = null;
 let prefs = {
   splitRatio: 0.32,
+  sidebarWidth: null,
   /** 左侧文件列表是否收起；宿主请求打开文件时视图会强制收起并持久化。 */
   treeCollapsed: false,
   showIgnored: false,
@@ -159,6 +160,7 @@ let prefs = {
   mdPreview: false,
   csvTable: true,
   jsonTree: false,
+  wrapLines: true,
   tablePageSize: 1000,
   /**
    * 项目组里「当前在看哪个 folder root」的记忆：projectKey → 绝对路径。
@@ -1211,6 +1213,7 @@ async function handleGitDiff(payload) {
   const root = await currentRoot();
   if (!root) throw fail("NO_WORKSPACE", "No project is open.");
   const rootPath = root.path;
+  if (payload?.expectedRoot && !samePath(rootPath, payload.expectedRoot)) throw staleGit();
   const rel = normalizeRelative(payload?.path);
   if (payload?.external || !(await gitFileAllowed(rootPath, rel, "read", (root.roots || []).map(r => r.path).filter(p => isInside(rootPath, p))))) throw fail("DENIED_PATH", "Select a regular, non-protected file.");
   const abs = path.join(rootPath, rel);
@@ -1464,8 +1467,11 @@ async function panelState(ctx) {
 async function handleGitChanges(payload) {
   const ctx = await gitContext(payload);
   const s = await panelState(ctx);
+  const refs = gitText(await panelCommand(ctx, ["for-each-ref", "--count=101", "--format=%(refname)", "refs/heads/"]));
+  const branches = refs ? refs.split(/\r?\n/).map(ref => ref.slice("refs/heads/".length)) : [];
   if ((await gitContext(payload)).key !== ctx.key) throw staleGit();
-  return { ok: true, entries: s.entries, revision: s.revision, branch: s.ref.replace(/^refs\/heads\//, "") || "HEAD", hidden: s.hidden, blocked: s.blocked };
+  return { ok: true, entries: s.entries, revision: s.revision, branch: s.ref.replace(/^refs\/heads\//, "") || "HEAD", hidden: s.hidden,
+    blocked: s.blocked, branches: branches.slice(0, 100), branchesTruncated: branches.length > 100 };
 }
 
 async function handleGitAction(action, payload) {
@@ -3792,11 +3798,15 @@ function sanitizePrefs(partial) {
     if (typeof partial.splitRatio === "number" && Number.isFinite(partial.splitRatio)) {
       next.splitRatio = Math.min(Math.max(partial.splitRatio, 0.15), 0.7);
     }
+    if (typeof partial.sidebarWidth === "number" && Number.isFinite(partial.sidebarWidth)) {
+      next.sidebarWidth = Math.round(Math.max(220, Math.min(520, partial.sidebarWidth)));
+    }
     if (typeof partial.treeCollapsed === "boolean") next.treeCollapsed = partial.treeCollapsed;
     if (typeof partial.showIgnored === "boolean") next.showIgnored = partial.showIgnored;
     if (typeof partial.watchFiles === "boolean") next.watchFiles = partial.watchFiles;
     if (typeof partial.mdPreview === "boolean") next.mdPreview = partial.mdPreview;
     if (typeof partial.csvTable === "boolean") next.csvTable = partial.csvTable;
+    if (typeof partial.wrapLines === "boolean") next.wrapLines = partial.wrapLines;
     if (typeof partial.jsonTree === "boolean") next.jsonTree = partial.jsonTree;
     // 表格每页行数：夹到 100–5000 并对齐到 100。视图的下拉框只提供几档固定值，
     // 这里不跟着枚举走（main.js 不该知道视图的选项表），夹紧就够了。

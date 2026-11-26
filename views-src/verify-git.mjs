@@ -456,8 +456,9 @@ if (!hasGit()) {
     const afterSave = await onPanelInvoke("fm.list", { path: "src" });
     const savedEntry = afterSave.entries.find((entry) => entry.name === "a.ts");
     check("保存后立刻反映新的行数（缓存已作废）", savedEntry?.git?.added === 2 && savedEntry?.git?.deleted === 1, JSON.stringify(savedEntry?.git));
-    const diffAfterSave = await onPanelInvoke("fm.git.diff", { path: "src/a.ts" });
+    const diffAfterSave = await onPanelInvoke("fm.git.diff", { path: "src/a.ts", expectedRoot: repo });
     check("保存后的差异里能看到新加的那一行", diffAfterSave.sections[0].hunks[0].lines.some((line) => line.text === "four"));
+    check("file diff rejects a different selected root", (await onPanelInvoke("fm.git.diff", { path: "src/a.ts", expectedRoot: join(repo, "src") })).code === "GIT_STALE");
 
     console.log("\nChanges panel: scoped Git mutations against a real, isolated repository");
     const scope = () => ({ workspacePath: workspace.path, rootPath: workspace.path, projectId: workspace.projectId });
@@ -470,8 +471,10 @@ if (!hasGit()) {
     writeFileSync(join(repo, literal), "one\n");
     writeFileSync(join(repo, "-only1.txt"), "other\n");
     writeFileSync(join(repo, ".env.local"), "synthetic fixture\n");
+    git(repo, ["branch", "topic/workbench"]);
     let s = await changes();
     success("changes list", s);
+    check("local branch names include current and other refs", s.branches?.includes(s.branch) && s.branches.includes("topic/workbench") && s.branchesTruncated === false);
     check("deleted and untracked files are selectable, credential names are hidden", s.hidden && s.entries.some(e => e.path === "gone.txt" && e.worktree === "D") && s.entries.some(e => e.path === literal && e.index === "?") && !JSON.stringify(s).includes(".env.local"));
     for (const path of [".", "..", "src", "*", ":(glob)**", ".env.local", "src/../clean.txt"]) check(`denied stage: ${path}`, !(await action("stage", s, { path })).ok);
     writeFileSync(join(repo, literal), "reviewed content changed\n");

@@ -21,6 +21,8 @@ type Props = {
   expanded: Set<string>;
   selected: string | null;
   showIgnored: boolean;
+  /** Name filter for the already-loaded part of the tree (empty = no filter). */
+  filter?: string;
   t: T;
   onToggle: (path: string) => void;
   onOpen: (entry: FileEntry) => void;
@@ -45,6 +47,13 @@ function buildRows(
   expanded: Set<string>,
   showIgnored: boolean,
   t: T,
+  /**
+   * 已经小写的筛选词；空串表示不过滤。筛选是**纯展示**：它只挑出名字命中
+   * 的条目，不改变展开状态、也不加载任何目录——所以清空筛选后树还是原来的
+   * 样子。未展开目录的子树里有没有命中，这里无从知道（树是懒加载的），
+   * 因此筛选时只认已经加载并展开的那部分，与「整个项目搜索」是两个入口。
+   */
+  filter: string,
 ): Row[] {
   const state = directories.get(dirPath);
   if (state?.error) {
@@ -54,19 +63,22 @@ function buildRows(
     return [{ kind: "note", path: dirPath, depth, text: t("loading"), error: false }];
   }
 
-  const entries = showIgnored
+  let entries = showIgnored
     ? state.entries
     : state.entries.filter((entry) => !entry.ignored);
+  if (filter) entries = entries.filter((entry) => entry.name.toLowerCase().includes(filter));
 
   if (entries.length === 0) {
-    return [{ kind: "note", path: dirPath, depth, text: t("empty"), error: false }];
+    // 筛选筛空不等于「这个文件夹是空的」：说清楚是哪一种，免得用户以为目录真的没了。
+    const text = filter && state.entries.length > 0 ? t("filterEmpty") : t("empty");
+    return [{ kind: "note", path: dirPath, depth, text, error: false }];
   }
 
   const rows: Row[] = [];
   for (const entry of entries) {
     rows.push({ kind: "entry", path: entry.path, depth, entry });
     if (entry.isDirectory && expanded.has(entry.path)) {
-      rows.push(...buildRows(entry.path, depth + 1, directories, expanded, showIgnored, t));
+      rows.push(...buildRows(entry.path, depth + 1, directories, expanded, showIgnored, t, filter));
     }
   }
   return rows;
@@ -77,6 +89,7 @@ export function Tree({
   expanded,
   selected,
   showIgnored,
+  filter = "",
   t,
   onToggle,
   onOpen,
@@ -85,9 +98,10 @@ export function Tree({
   onContextMenu,
 }: Props) {
   const listRef = useRef<HTMLDivElement | null>(null);
+  const needle = filter.trim().toLowerCase();
   const rows = useMemo(
-    () => buildRows("", 0, directories, expanded, showIgnored, t),
-    [directories, expanded, showIgnored, t],
+    () => buildRows("", 0, directories, expanded, showIgnored, t, needle),
+    [directories, expanded, showIgnored, t, needle],
   );
   const [drag, setDrag] = useState<{ entry: FileEntry; rows: Row[]; token: string } | null>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
