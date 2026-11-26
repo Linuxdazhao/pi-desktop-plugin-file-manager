@@ -6,7 +6,7 @@ const path = require('node:path');
 
 // Main-process only. Hold *all* matching replies, including competing directory
 // requests. Playwright controls this object; the renderer gets no test channels.
-function createGate() {
+function createGate(holdInitialList = true) {
   const gates = new Map();
   function hold(channel, file = '') {
     const key = JSON.stringify([channel, file]);
@@ -16,7 +16,7 @@ function createGate() {
     gates.set(key, { pending, release, entered: false });
     return key;
   }
-  hold('fm.list'); // Before the file:// view is loaded.
+  if (holdInitialList) hold('fm.list'); // Before the file:// view is loaded.
   return {
     hold, entered: key => gates.get(key)?.entered === true,
     async beforeReply(channel, file = '') {

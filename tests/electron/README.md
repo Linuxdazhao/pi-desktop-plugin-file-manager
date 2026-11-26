@@ -25,6 +25,16 @@ The same dependency and runtime overrides as the PDF checks apply. Set
 `PDF_EVIDENCE_DIR` to retain `document-tabs-dirty.png` with both drafts visible
 in the tab strip. No installed Desktop profile or user files are used.
 
+## Workbench
+
+`npm run verify:workbench` runs the production view against a temporary
+two-folder project with real Git. It covers rail and tab navigation, resize and
+wrap persistence, search, status, staged/unstaged diffs without extra requests,
+independent review tabs, and a commit completing after leaving Source Control.
+It checks all seven remote actions and their confirmation/lease payloads at
+the bridge; remote transport is never started. `PDF_EVIDENCE_DIR` retains
+`workbench-*.png` at normal and narrow widths in the dark and light palettes.
+
 ## Markdown images
 
 `pnpm verify:markdown` runs the production `file://` view and `main.js` through

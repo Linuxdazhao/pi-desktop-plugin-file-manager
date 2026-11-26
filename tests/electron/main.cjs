@@ -3,10 +3,18 @@ const path = require('node:path');
 app.setPath('userData', process.env.PDF_PROFILE_DIR);
 // Loading checks start with manual refresh, then enable the real watcher in the UI.
 const loadingTest = process.env.FM_LOADING_TEST === '1';
-let settings = { fmPrefs: { watchFiles: !loadingTest } };
-if (loadingTest) global.loadingGate = require('./verify-loading.cjs').createGate();
+const workbenchTest = process.env.FM_WORKBENCH_TEST === '1';
+let settings = { fmPrefs: { watchFiles: !loadingTest && !workbenchTest } };
+if (loadingTest || workbenchTest) global.loadingGate = require('./verify-loading.cjs').createGate(loadingTest);
+if (workbenchTest) global.workbenchCalls = [];
 global.pi = {
-  workspace: { get: async () => ({ path: process.env.PDF_FIXTURE_DIR, name: 'Synthetic PDF project' }) },
+  workspace: { get: async () => {
+    const root = process.env.PDF_FIXTURE_DIR;
+    const second = workbenchTest ? process.env.FM_SECOND_ROOT : undefined;
+    return second ? { path: root, name: 'Workbench fixture', projectId: 'workbench-fixture', roots: [
+      { path: root, name: 'Workbench fixture', primary: true }, { path: second, name: 'second-folder' },
+    ] } : { path: root, name: 'Synthetic PDF project' };
+  } },
   plugin: { getDataPath: async () => process.env.PDF_PROFILE_DIR, getSettings: async () => settings, setSettings: async (value) => { settings = value; } },
 };
 const plugin = require(path.join(process.env.PDF_PLUGIN_DIR, 'main.js'));
@@ -31,7 +39,13 @@ app.whenReady().then(async () => {
     }
     if (channel === 'app.getAppearance') return global.testAppearance;
     if (channel === 'workspace.get') return global.pi.workspace.get();
-    if (loadingTest) {
+    if (workbenchTest && (channel.startsWith('fm.git.') || channel === 'fm.write')) {
+      global.workbenchCalls.push({ channel, payload });
+      // Never start remote Git transport from a renderer test. Local Git reads
+      // and index mutations still run unchanged through the production handlers.
+      if (channel === 'fm.git.syncAction' && payload?.action !== 'init') return { ok: true };
+    }
+    if (loadingTest || workbenchTest) {
       const response = await plugin.onPanelInvoke(channel, payload);
       await global.loadingGate.beforeReply(channel, payload?.path);
       return response;

@@ -108,8 +108,17 @@ export type GitDiffResponse =
 
 export type Failure = { ok: false; code: string; message: string };
 
+/**
+ * Which repository a source-control view is looking at. Every `fm.git.*` call
+ * takes it, and the host re-derives the same context on its side, so a stale
+ * one is refused instead of silently acting on another folder.
+ */
+export type RepoContext = { workspacePath: string; rootPath: string; projectId?: string };
+
 export type Prefs = {
   splitRatio: number;
+  /** Fixed sidebar width; unset for installations with only the legacy ratio. */
+  sidebarWidth?: number | null;
   /**
    * 左侧文件列表是否收起。宿主请求打开文件时会强制收起，并随设置持久化；
    * splitRatio 照旧保留，重新展开时按原宽度恢复。
@@ -121,7 +130,11 @@ export type Prefs = {
    * 一直在，监听只是省掉那一下点击。
    */
   watchFiles: boolean;
-  /** Markdown 默认打开为预览还是编辑；只对 .md/.markdown/.mdx 生效。 */
+  /**
+   * 自动换行。视图偏好，跟着 prefs 落盘；切换只重配置编辑器的 compartment，
+   * 不重建文档（撤销历史与光标都留着）。
+   */
+  wrapLines?: boolean;
   mdPreview: boolean;
   /** CSV/TSV 默认打开为表格还是源码。 */
   csvTable: boolean;

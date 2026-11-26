@@ -33,15 +33,17 @@ import { resolveLanguage } from "./languages";
 const languageSlot = new Compartment();
 const highlightSlot = new Compartment();
 const readOnlySlot = new Compartment();
+/** Automatic wrapping is a view preference, not document content. */
+const wrapSlot = new Compartment();
 
-type EditorOptions = { base: Base; onDocChanged: () => void; onSave: () => void };
+type EditorOptions = { base: Base; onDocChanged: () => void; onSave: () => void; onCursor?: () => void; wrap?: boolean };
 // A snapshot may outlive its original view. Its extensions must not retain that
 // view's React callbacks (or send a save/dirty notification to the wrong pane).
 const handlers = new WeakMap<EditorView, EditorOptions>();
 const readOnlyExtensions = (value: boolean) =>
   value ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : [];
 
-function baseExtensions(base: Base, readOnly = false, language: Extension = []): Extension[] {
+function baseExtensions(base: Base, readOnly = false, language: Extension = [], wrap = true): Extension[] {
   return [
     lineNumbers(),
     highlightActiveLineGutter(),
@@ -58,7 +60,7 @@ function baseExtensions(base: Base, readOnly = false, language: Extension = []):
     crosshairCursor(),
     highlightActiveLine(),
     highlightSelectionMatches(),
-    EditorView.lineWrapping,
+    wrapSlot.of(wrap ? EditorView.lineWrapping : []),
     keymap.of([
       { key: "Mod-s", preventDefault: true, run(view) { handlers.get(view)?.onSave(); return true; } },
       ...closeBracketsKeymap,
@@ -69,6 +71,9 @@ function baseExtensions(base: Base, readOnly = false, language: Extension = []):
     ]),
     EditorView.updateListener.of(update => {
       if (update.docChanged) handlers.get(update.view)?.onDocChanged();
+      // 光标一动就把位置送回状态栏；拖选时 selectionSet 为真，键入时它同一帧
+      // 也和 docChanged 一起来——两者都只读一次 selection，不额外遍历文档。
+      if (update.selectionSet || update.docChanged) handlers.get(update.view)?.onCursor?.();
     }),
     readOnlySlot.of(readOnlyExtensions(readOnly)),
     languageSlot.of(language),
@@ -85,6 +90,8 @@ export type TabEditorSnapshot = {
 export type EditorHandle = {
   view: EditorView;
   capture(): TabEditorSnapshot;
+  /** Toggle soft wrapping without rebuilding the editor (keeps undo history). */
+  setWrap(wrap: boolean): void;
   setDocument(text: string, filePath: string, readOnly: boolean, restore?: TabEditorSnapshot): void;
   destroy(): void;
   setBase(base: Base): void;
@@ -97,8 +104,9 @@ export function createEditor(
   options: EditorOptions,
 ): EditorHandle {
   let base = options.base;
+  let wrap = options.wrap ?? true;
   let languageToken = 0;
-  const view = new EditorView({ parent, state: EditorState.create({ extensions: baseExtensions(base) }) });
+  const view = new EditorView({ parent, state: EditorState.create({ extensions: baseExtensions(base, false, [], wrap) }) });
   handlers.set(view, options);
 
   // display:none (structured/Git preview) reports zero scroll offsets. Keep
@@ -124,17 +132,22 @@ export function createEditor(
     setReadOnly(value) {
       view.dispatch({ effects: readOnlySlot.reconfigure(readOnlyExtensions(value)) });
     },
+    setWrap(next) {
+      wrap = next;
+      view.dispatch({ effects: wrapSlot.reconfigure(wrap ? EditorView.lineWrapping : []) });
+    },
     setDocument(text, filePath, readOnly, restore) {
       const token = ++languageToken;
       const description = resolveLanguage(filePath);
       const language = description?.support ?? [];
-      // setState is a document switch, not a replacement edit. A fresh load
-      // starts with empty history; a tab restore keeps its own history fields.
+      // A fresh load gets the current global wrapping preference; a restored tab
+      // keeps its immutable history and just swaps in the current view settings.
       const state = restore ? restore.state.update({ effects: [
         highlightSlot.reconfigure(highlightExtension(base)),
         readOnlySlot.reconfigure(readOnlyExtensions(readOnly)),
         languageSlot.reconfigure(language),
-      ] }).state : EditorState.create({ doc: text, extensions: baseExtensions(base, readOnly, language) });
+        wrapSlot.reconfigure(wrap ? EditorView.lineWrapping : []),
+      ] }).state : EditorState.create({ doc: text, extensions: baseExtensions(base, readOnly, language, wrap) });
       view.setState(state);
       restoringScroll = Boolean(restore);
       if (restore) {

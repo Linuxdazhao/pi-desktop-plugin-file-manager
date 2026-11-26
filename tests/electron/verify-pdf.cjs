@@ -42,6 +42,7 @@ function missingPagePdf() {
   await fs.mkdir(evidence, { recursive: true });
   // Commits belong only to this disposable fixture repository.
   const git = (...args) => execFileSync('git', args, { cwd: fixtures, stdio: 'pipe' });
+  await fs.writeFile(path.join(fixtures, '.gitattributes'), 'git-changed.pdf binary\n');
   git('init', '-q'); git('add', '.');
   git('-c', 'user.name=PDF fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'Synthetic fixtures');
   await fs.copyFile(path.join(fixtures, 'second.pdf'), path.join(fixtures, 'git-changed.pdf'));
@@ -259,6 +260,8 @@ function missingPagePdf() {
     await open('git-changed.pdf'); await loaded('PDF preview verification - page 1');
     await page.getByRole('treeitem').filter({ hasText: 'git-changed.pdf' }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'View changes', exact: true }).click();
+    await page.locator('.diff-pane').getByText(/this file is binary/i).waitFor();
+    assert.equal(await page.locator('.pdf-stage:visible').count(), 0);
     await page.getByRole('button', { name: 'Back to the file', exact: true }).click();
     await loaded('PDF preview verification - page 1');
     results.push('PDF binary Git diff and return to preview');
